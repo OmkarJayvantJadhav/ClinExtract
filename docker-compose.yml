@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: clinextract
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - clin_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8001:8000"
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/clinextract
+      - CORS_ORIGINS=["http://localhost:5173", "http://localhost:3000"]
+      - APP_ENV=development
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - EXTRACTION_PROVIDER=rule_based
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - EXTRACTION_FALLBACK_ENABLED=false
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - clin_network
+    volumes:
+      - documents_data:/app/data/documents
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - clin_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: ./backend
+    command: ["celery", "-A", "src.worker.celery_app", "worker", "--loglevel=info"]
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/clinextract
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - APP_ENV=development
+      - EXTRACTION_PROVIDER=rule_based
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - EXTRACTION_FALLBACK_ENABLED=false
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - clin_network
+    volumes:
+      - documents_data:/app/data/documents
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    networks:
+      - clin_network
+
+networks:
+  clin_network:
+
+volumes:
+  postgres_data:
+  documents_data:
