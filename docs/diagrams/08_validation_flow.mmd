@@ -1,0 +1,23 @@
+flowchart TD
+    A[Raw Extracted Field] --> B{Data Type Normalization}
+    
+    B -->|Date| C[Parse to YYYY-MM-DD]
+    B -->|Numeric| D[Strip non-digits, cast to Float]
+    
+    C --> E{Validation Engine}
+    D --> E
+    
+    E --> F[Check Presence / Required]
+    E --> G[Check Reference Ranges]
+    E --> H[Check Source Mismatch]
+    
+    F & G & H --> I[Calculate Confidence Score]
+    
+    I --> J{Confidence > Threshold & Valid?}
+    
+    J -->|Yes| K[Set Field VALID]
+    J -->|No| L[Set Field LOW_CONFIDENCE / OUT_OF_RANGE]
+    
+    K & L --> M{Any fields invalid?}
+    M -->|Yes| N[Document: REVIEW_REQUIRED]
+    M -->|No| O[Document: AUTO_ACCEPTED]

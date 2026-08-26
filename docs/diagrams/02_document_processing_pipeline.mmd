@@ -1,0 +1,27 @@
+stateDiagram-v2
+    [*] --> UPLOADED: Upload API
+    UPLOADED --> PROCESSING: Celery Task Starts
+    
+    state Processing_Pipeline {
+        [*] --> Image_Preparation
+        Image_Preparation --> OCR_Extraction
+        OCR_Extraction --> Data_Extraction
+        Data_Extraction --> Validation
+        Validation --> [*]
+    }
+    
+    PROCESSING --> Processing_Pipeline
+    
+    Processing_Pipeline --> REVIEW_REQUIRED: Validation Failed or Low Confidence
+    Processing_Pipeline --> AUTO_ACCEPTED: All Fields Valid & High Confidence
+    
+    REVIEW_REQUIRED --> REVIEW_IN_PROGRESS: Human Reviewer Claims
+    REVIEW_IN_PROGRESS --> HUMAN_APPROVED: Reviewer Approves
+    REVIEW_IN_PROGRESS --> HUMAN_REJECTED: Reviewer Rejects
+    
+    Processing_Pipeline --> FAILED: Exception during pipeline
+    
+    AUTO_ACCEPTED --> [*]
+    HUMAN_APPROVED --> [*]
+    HUMAN_REJECTED --> [*]
+    FAILED --> [*]

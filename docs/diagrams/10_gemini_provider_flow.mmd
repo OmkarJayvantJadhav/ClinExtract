@@ -1,0 +1,23 @@
+flowchart TD
+    A[GeminiProvider] --> B{Determine Input Type}
+    
+    B -->|Native PDF / OCR Text| C[Structured Text Extraction]
+    B -->|Scanned Image| D[VLM Image Extraction]
+    
+    C --> E[google-genai SDK API]
+    D --> E
+    
+    E -->|Call Gemini API with Pydantic Schema| F{API Response}
+    
+    F -->|Success| G[Parse JSON to Pydantic Model]
+    F -->|RateLimit / Network Error| H[Retry Loop]
+    H --> E
+    H -->|Max Retries| I[Extraction Exception]
+    
+    F -->|Invalid Schema / Bad Request| J[Extraction Exception]
+    
+    G --> K[Return BaseExtractionSchema]
+    
+    I & J --> L{Fallback Enabled?}
+    L -->|Yes| M[Invoke RuleBasedExtractor]
+    L -->|No| N[Mark Job FAILED]

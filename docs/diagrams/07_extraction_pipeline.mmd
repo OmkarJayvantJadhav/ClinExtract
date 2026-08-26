@@ -1,0 +1,23 @@
+flowchart TD
+    A[Processing Pipeline] --> B{Determine File Type}
+    
+    B -->|Native PDF| C[PyMuPDF Extractor]
+    B -->|Scanned PDF / Image| D[OpenCV Preprocessing]
+    
+    D --> D1[Deskew]
+    D1 --> D2[Grayscale & Threshold]
+    D2 --> E[Tesseract OCR]
+    
+    C --> F[JSON OCR Artifact Generation]
+    E --> F
+    
+    F --> G[Extraction Factory]
+    G --> H{Provider Configured}
+    
+    H -->|RuleBased| I[RuleBasedExtractor (Regex)]
+    H -->|Gemini| J[GeminiProvider (LLM/VLM)]
+    
+    I --> K[Pydantic Validation (Schemas)]
+    J --> K
+    
+    K --> L[Database Insertion: Extractions & Fields]

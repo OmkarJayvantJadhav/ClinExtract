@@ -1,0 +1,28 @@
+graph TD
+    subgraph Frontend
+        A[React App] -->|Vite, TanStack Query| B[API Client]
+    end
+
+    subgraph Backend API
+        B -->|REST| C[FastAPI Gateway]
+        C -->|Auth, CSRF, RBAC| D[API Routers]
+    end
+
+    subgraph Database Layer
+        D -->|SQLAlchemy| E[(PostgreSQL)]
+        F[Celery Workers] -->|SQLAlchemy| E
+    end
+
+    subgraph Message Broker
+        D -->|Publish Task| G[RabbitMQ]
+        G -->|Consume Task| F
+    end
+
+    subgraph File Storage
+        D -->|Save PDF/Image| H[Local Storage]
+        F -->|Read/Save OCR| H
+    end
+
+    subgraph External Services
+        F -.->|Optional Gemini API| I[Google Gemini]
+    end

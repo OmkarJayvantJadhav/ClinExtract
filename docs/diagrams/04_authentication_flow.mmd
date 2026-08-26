@@ -1,0 +1,34 @@
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant API
+    participant DB
+    
+    User->>Frontend: Enters Email & Password
+    Frontend->>API: POST /api/v1/auth/login
+    API->>DB: Fetch User by Email
+    DB-->>API: Returns User Hash
+    
+    alt Password Invalid
+        API-->>Frontend: 401 Unauthorized
+        Frontend-->>User: Show Error
+    else Password Valid
+        API->>API: Generate JWT Payload
+        API->>API: Generate CSRF Token
+        API-->>Frontend: Set-Cookie: access_token (HttpOnly)
+        API-->>Frontend: Return JSON { "csrf_token": "...", "user": {...} }
+    end
+    
+    Frontend->>Frontend: Store CSRF token in AuthContext
+    Frontend-->>User: Redirect to Dashboard
+    
+    Note over Frontend, API: Subsequent API Requests
+    Frontend->>API: Request + Cookie + X-CSRF-Token
+    API->>API: Validate JWT
+    API->>API: Validate CSRF match
+    API->>API: Check RBAC Roles
+    alt Valid
+        API-->>Frontend: Success Response
+    else Invalid
+        API-->>Frontend: 401/403 Error
+    end

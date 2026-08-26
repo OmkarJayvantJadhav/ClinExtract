@@ -1,0 +1,85 @@
+erDiagram
+    users ||--o{ documents : "uploads"
+    users ||--o{ reviews : "claims/completes"
+    users ||--o{ audit_logs : "acts as"
+    
+    documents ||--o| processing_jobs : "has one active"
+    documents ||--o{ extractions : "has many (historical)"
+    documents ||--o{ reviews : "requires"
+    
+    extractions ||--o{ extracted_fields : "contains"
+    extracted_fields ||--o{ field_corrections : "corrected by"
+    
+    reviews ||--o{ audit_logs : "generates"
+    
+    users {
+        uuid id PK
+        string email
+        string hashed_password
+        enum role "admin, reviewer, operator"
+        boolean is_active
+    }
+    
+    documents {
+        uuid id PK
+        uuid uploader_id FK
+        string filename
+        string original_path
+        string content_type
+        enum status "UPLOADED, PROCESSING, REVIEW_REQUIRED, etc"
+    }
+    
+    processing_jobs {
+        uuid id PK
+        uuid document_id FK
+        string celery_task_id
+        enum status "PENDING, RUNNING, COMPLETED, FAILED"
+        jsonb error_details
+    }
+    
+    extractions {
+        uuid id PK
+        uuid document_id FK
+        uuid job_id FK
+        enum provider "rule_based, gemini, mock"
+        jsonb ocr_metadata
+    }
+    
+    extracted_fields {
+        uuid id PK
+        uuid extraction_id FK
+        string field_name
+        string field_value
+        string raw_text
+        float confidence_score
+        jsonb bounding_box
+        enum validation_state "VALID, OUT_OF_RANGE, LOW_CONFIDENCE, etc"
+    }
+    
+    field_corrections {
+        uuid id PK
+        uuid field_id FK
+        uuid reviewer_id FK
+        string corrected_value
+        string previous_value
+        datetime corrected_at
+    }
+    
+    reviews {
+        uuid id PK
+        uuid document_id FK
+        uuid reviewer_id FK
+        enum status "PENDING, CLAIMED, COMPLETED"
+        string decision "APPROVED, REJECTED"
+        string notes
+    }
+    
+    audit_logs {
+        uuid id PK
+        uuid user_id FK
+        string entity_type "document, review, system"
+        uuid entity_id
+        string action
+        jsonb details
+        string ip_address
+    }

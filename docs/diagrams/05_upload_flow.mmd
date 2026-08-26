@@ -1,0 +1,29 @@
+sequenceDiagram
+    participant User
+    participant React
+    participant FastAPI
+    participant Storage
+    participant DB
+    participant RabbitMQ
+    
+    User->>React: Select PDF & click Upload
+    React->>FastAPI: POST /api/v1/documents/upload (Multipart)
+    
+    FastAPI->>FastAPI: Validate JWT & CSRF
+    FastAPI->>FastAPI: Validate Content-Type (pdf, png, jpg)
+    FastAPI->>FastAPI: Validate Magic Bytes
+    FastAPI->>FastAPI: Generate correlation_id
+    
+    FastAPI->>Storage: save_document(file_bytes, uuid)
+    Storage-->>FastAPI: returns file_path
+    
+    FastAPI->>DB: INSERT INTO documents (status=UPLOADED)
+    DB-->>FastAPI: document_id
+    
+    FastAPI->>DB: INSERT INTO processing_jobs (status=PENDING)
+    DB-->>FastAPI: job_id
+    
+    FastAPI->>RabbitMQ: Celery Publish (process_document_task, job_id)
+    
+    FastAPI-->>React: 201 Created (document_id)
+    React-->>User: Redirect to Processing View

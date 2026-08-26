@@ -1,0 +1,29 @@
+sequenceDiagram
+    participant Reviewer
+    participant React Workspace
+    participant FastAPI
+    participant DB
+    
+    Reviewer->>React Workspace: Open Document
+    React Workspace->>FastAPI: POST /api/v1/reviews/{id}/claim
+    FastAPI->>DB: UPDATE review SET status=CLAIMED, reviewer_id=X
+    FastAPI-->>React Workspace: Success
+    
+    Note over Reviewer, DB: Reviewer makes corrections
+    Reviewer->>React Workspace: Fix 'Hemoglobin' value
+    React Workspace->>FastAPI: POST /api/v1/reviews/{id}/corrections
+    FastAPI->>DB: INSERT INTO field_corrections
+    FastAPI->>DB: INSERT INTO audit_logs (Correction Made)
+    FastAPI-->>React Workspace: Success
+    
+    Reviewer->>React Workspace: Click Approve
+    React Workspace->>FastAPI: POST /api/v1/reviews/{id}/complete
+    FastAPI->>FastAPI: Re-run Validation Engine on corrected data
+    alt Validation Failed
+        FastAPI-->>React Workspace: 400 Bad Request (Cannot approve invalid fields)
+    else Validation Passed
+        FastAPI->>DB: UPDATE review SET status=COMPLETED, decision=APPROVED
+        FastAPI->>DB: UPDATE documents SET status=HUMAN_APPROVED
+        FastAPI->>DB: INSERT INTO audit_logs (Review Completed)
+        FastAPI-->>React Workspace: 200 OK
+    end

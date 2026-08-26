@@ -1,0 +1,31 @@
+sequenceDiagram
+    participant RabbitMQ
+    participant CeleryWorker
+    participant DB
+    participant Processor
+    
+    RabbitMQ->>CeleryWorker: Deliver process_document_task
+    
+    CeleryWorker->>DB: Fetch Job & ROW LOCK (FOR UPDATE)
+    alt Job != PENDING
+        CeleryWorker-->>RabbitMQ: ACK (Duplicate delivery)
+    else
+        CeleryWorker->>DB: Update Job=RUNNING, Doc=PROCESSING
+    end
+    
+    CeleryWorker->>Processor: run_processing_pipeline()
+    
+    alt Success
+        Processor-->>CeleryWorker: Extracted & Validated Data
+        CeleryWorker->>DB: Update Doc=(REVIEW_REQUIRED | AUTO_ACCEPTED)
+        CeleryWorker->>DB: Update Job=COMPLETED
+        CeleryWorker-->>RabbitMQ: ACK Task
+    else Error (Retryable)
+        Processor-->>CeleryWorker: Exception
+        CeleryWorker->>DB: Update Job=PENDING (or RUNNING)
+        CeleryWorker-->>RabbitMQ: NACK / Retry
+    else Error (Fatal)
+        Processor-->>CeleryWorker: Exception
+        CeleryWorker->>DB: Update Job=FAILED, Doc=FAILED
+        CeleryWorker-->>RabbitMQ: ACK (Task handled fatally)
+    end
