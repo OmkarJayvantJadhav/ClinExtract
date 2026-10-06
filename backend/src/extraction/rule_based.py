@@ -4,24 +4,33 @@ from src.extraction.base import BaseExtractor
 from src.extraction.schemas import ExtractionResult, ExtractedFieldData
 
 # Field labels used as look-ahead terminators for free-text values such as the patient name.
-_LABELS = r"DOB|Date\s*of\s*Birth|Patient|Glucose|Hemoglobin|Hematocrit|White|Platelet|Specimen|Collection|Received"
+_LABELS = (
+    r"DOB|D\.O\.B\.?|Date\s*of\s*Birth|Birth\s*Date|Patient|MRN|Medical|Sex|Gender|Age|Glucose|"
+    r"Hemoglobin|Haemoglobin|Hgb|Hematocrit|Haematocrit|Hct|White|WBC|Platelets?|PLT|Specimen|Sample|"
+    r"Collect(?:ion|ed)|Received|Accession|Ordering|Physician|Doctor|Report"
+)
+_DATE = r"\d{4}-\d{1,2}-\d{1,2}|\d{4}/\d{1,2}/\d{1,2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}-\d{1,2}-\d{4}|\d{1,2}\.\d{1,2}\.\d{4}"
+_COUNT_UNIT = r"(?:x\s*)?10\^?[39]\s*/\s*[uµμ]?L|K/[uµμ]L|thou/[uµμ]L|cells/[uµμ]L|/[uµμ]L|/mm3"
+_NUMBER = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
 
 class RuleBasedExtractor(BaseExtractor):
     def __init__(self):
-        # A simple deterministic rule engine using regex patterns.
-        # Each rule captures the value in group "value" and, optionally, the unit in group "unit".
+        # A deterministic rule engine. Labels accept common synonyms/abbreviations so several
+        # lab report layouts work. Each rule captures the value in group "value" and,
+        # optionally, the unit in group "unit".
         self.rules = [
-            {"field_name": "patient_name", "pattern": rf"(?i)patient\s*name:?\s*(?P<value>[A-Za-z][A-Za-z'\-\.]*(?:\s+[A-Za-z][A-Za-z'\-\.]*)*?)(?=\s+(?:{_LABELS})\b|\s*$)"},
-            {"field_name": "date_of_birth", "pattern": r"(?i)(?:dob|date\s*of\s*birth):?\s*(?P<value>\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})"},
-            {"field_name": "patient_id", "pattern": r"(?i)patient\s*id:?\s*(?P<value>[a-zA-Z0-9\-]+)"},
-            {"field_name": "specimen_type", "pattern": r"(?i)specimen\s*type:?\s*(?P<value>blood|urine|saliva|serum|plasma)"},
-            {"field_name": "collection_date", "pattern": r"(?i)collection\s*date:?\s*(?P<value>\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})"},
-            {"field_name": "received_date", "pattern": r"(?i)received\s*date:?\s*(?P<value>\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})"},
-            {"field_name": "glucose", "pattern": r"(?i)glucose:?\s*(?P<value>\d+\.?\d*)\s*(?P<unit>mg/dL|mmol/L)?"},
-            {"field_name": "hemoglobin", "pattern": r"(?i)hemoglobin:?\s*(?P<value>\d+\.?\d*)\s*(?P<unit>g/dL|g/L)?"},
-            {"field_name": "hematocrit", "pattern": r"(?i)hematocrit:?\s*(?P<value>\d+\.?\d*)\s*(?P<unit>%)?"},
-            {"field_name": "white_blood_cell_count", "pattern": r"(?i)white\s*blood\s*cell\s*count:?\s*(?P<value>\d{1,3}(?:,\d{3})+|\d+\.?\d*)\s*(?P<unit>(?:x\s*)?10\^?[39]\s*/\s*[uµμ]?L|K/[uµμ]L|cells/[uµμ]L|/[uµμ]L)?"},
-            {"field_name": "platelet_count", "pattern": r"(?i)platelet\s*count:?\s*(?P<value>\d{1,3}(?:,\d{3})+|\d+\.?\d*)\s*(?P<unit>(?:x\s*)?10\^?[39]\s*/\s*[uµμ]?L|K/[uµμ]L|cells/[uµμ]L|/[uµμ]L)?"},
+            {"field_name": "patient_name", "pattern": rf"(?i)(?:patient\s*name\s*:?|\b(?:patient|name)\s*:)\s*(?P<value>[A-Za-z][A-Za-z'\-\.,]*(?:\s+[A-Za-z][A-Za-z'\-\.,]*)*?),?(?=\s+(?:{_LABELS})\b|\s*$)"},
+            {"field_name": "date_of_birth", "pattern": rf"(?i)(?:\bdob\b|d\.o\.b\.?|date\s*of\s*birth|birth\s*date):?\s*(?P<value>{_DATE})"},
+            {"field_name": "patient_id", "pattern": r"(?i)(?:patient\s*id|\bmrn\b|medical\s*record\s*(?:number|no\.?|#)|\bpt\.?\s*id)\s*:?\s*#?\s*(?P<value>[a-zA-Z0-9][a-zA-Z0-9\-]*)"},
+            {"field_name": "patient_sex", "pattern": r"(?i)\b(?:sex|gender)\s*:?\s*(?P<value>male|female|m|f)\b"},
+            {"field_name": "specimen_type", "pattern": r"(?i)(?:specimen|sample)(?:\s*type)?\s*:?\s*(?P<value>whole\s+blood|blood|urine|saliva|serum|plasma)\b"},
+            {"field_name": "collection_date", "pattern": rf"(?i)(?:collection\s*date|date\s*collected|collected(?:\s*on)?|draw\s*date)\s*:?\s*(?P<value>{_DATE})"},
+            {"field_name": "received_date", "pattern": rf"(?i)(?:received\s*date|date\s*received|received(?:\s*on)?)\s*:?\s*(?P<value>{_DATE})"},
+            {"field_name": "glucose", "pattern": rf"(?i)\bglucose(?:,?\s*(?:fasting|random|serum|plasma))?\s*:?\s*(?P<value>{_NUMBER})\s*(?P<unit>mg/dL|mmol/L)?"},
+            {"field_name": "hemoglobin", "pattern": rf"(?i)\b(?:hemoglobin|haemoglobin|hgb|hb)\b\s*:?\s*(?P<value>{_NUMBER})\s*(?P<unit>g/dL|g/L|mmol/L)?"},
+            {"field_name": "hematocrit", "pattern": rf"(?i)\b(?:hematocrit|haematocrit|hct)\b\s*:?\s*(?P<value>{_NUMBER})\s*(?P<unit>%|L/L)?"},
+            {"field_name": "white_blood_cell_count", "pattern": rf"(?i)\b(?:white\s*blood\s*cell(?:s|\s*count)?|wbc(?:\s*count)?|leukocytes?)\b\s*:?\s*(?P<value>{_NUMBER})\s*(?P<unit>{_COUNT_UNIT})?"},
+            {"field_name": "platelet_count", "pattern": rf"(?i)\b(?:platelets?(?:\s*count)?|plt)\b\s*:?\s*(?P<value>{_NUMBER})\s*(?P<unit>{_COUNT_UNIT})?"},
         ]
 
     def extract(self, document_data: Dict[str, Any], metadata: Dict[str, Any] = None) -> ExtractionResult:
@@ -81,7 +90,7 @@ class RuleBasedExtractor(BaseExtractor):
 
         return ExtractionResult(
             extractor_type="rule_based",
-            model_version="rule-based-v1.1",
+            model_version="rule-based-v1.2",
             provider="deterministic",
             prompt_version="1.0",
             fields=extracted_fields

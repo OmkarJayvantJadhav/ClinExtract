@@ -76,4 +76,13 @@ class StorageService:
         Stores an artifact for a given storage key.
         Returns the path to the artifact.
         """
-        return await self.backend.upload_artifact(f"{storage_key}_ocr.json", data)
+        return await self.backend.upload_artifact(self.artifact_key(storage_key), data)
+
+    @staticmethod
+    def artifact_key(storage_key: str) -> str:
+        return f"{storage_key}_ocr.json"
+
+    async def delete_document_files(self, storage_key: str) -> None:
+        """Removes the stored document and its OCR artifact (missing files are ignored)."""
+        await self.backend.delete_file(storage_key)
+        await self.backend.delete_artifact(self.artifact_key(storage_key))

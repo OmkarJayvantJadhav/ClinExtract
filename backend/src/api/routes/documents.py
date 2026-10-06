@@ -1,26 +1,31 @@
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from typing import Any
 
 import filetype
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Request, Query
 from fastapi.responses import Response
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from src.core.config import settings
 from src.core.database import get_db
 from src.core.logging import get_logger
 from src.db.models.user import User, UserRole
 from src.db.models.document import Document, DocumentStatus
 from src.db.models.extraction import Extraction
 from src.db.models.extracted_field import ExtractedField
+from src.db.models.field_correction import FieldCorrection
+from src.db.models.audit_log import AuditLog
 from src.db.models.processing_job import ProcessingJob, JobStatus
 from src.schemas.document import DocumentResponse, DocumentDetailResponse, DocumentListItem, PaginatedDocumentResponse
 from src.api.deps import require_roles
 from src.storage import get_storage_service, StorageService
 from src.services.audit import log_audit_event, RESOURCE_DOCUMENT
+from src.services.retention import purge_document
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -39,20 +44,74 @@ def _list_item(doc: Document) -> DocumentListItem:
         item.patient_id = values.get("patient_id")
     return item
 
+async def _log_access(db: AsyncSession, action: str, document_id: uuid.UUID, user: User, correlation_id=None) -> None:
+    """
+    Records who viewed/downloaded a document (PHI access log). Repeat accesses by the same user
+    within VIEW_AUDIT_THROTTLE_MINUTES are logged once, so UI polling doesn't flood the log.
+    """
+    since = datetime.now(timezone.utc) - timedelta(minutes=settings.VIEW_AUDIT_THROTTLE_MINUTES)
+    recent = await db.scalar(
+        select(func.count()).select_from(AuditLog).where(
+            AuditLog.action == action,
+            AuditLog.resource_type == RESOURCE_DOCUMENT,
+            AuditLog.resource_id == str(document_id),
+            AuditLog.user_id == user.id,
+            AuditLog.created_at >= since,
+        )
+    )
+    if not recent:
+        await log_audit_event(db, action=action, resource_type=RESOURCE_DOCUMENT, resource_id=str(document_id),
+                              user_id=user.id, correlation_id=correlation_id)
+        await db.commit()
+
+def _like(term: str) -> str:
+    """ILIKE pattern for a literal substring match (user input wildcards are escaped)."""
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+def _patient_match(term: str):
+    """EXISTS clause: the current extraction's patient name/id (original or corrected) contains `term`."""
+    like = _like(term)
+    corrected = (
+        select(FieldCorrection.id)
+        .where(FieldCorrection.extracted_field_id == ExtractedField.id, FieldCorrection.new_value.ilike(like, escape="\\"))
+        .exists()
+    )
+    return (
+        select(ExtractedField.id)
+        .join(Extraction, Extraction.id == ExtractedField.extraction_id)
+        .where(
+            Extraction.document_id == Document.id,
+            ExtractedField.field_name.in_(("patient_name", "patient_id")),
+            or_(ExtractedField.value.ilike(like, escape="\\"), corrected),
+        )
+        .exists()
+    )
+
 @router.get("", response_model=PaginatedDocumentResponse)
 async def list_documents(
-    status: DocumentStatus | None = None,
+    status: list[DocumentStatus] | None = Query(None, description="Filter by one or more statuses"),
+    q: str | None = Query(None, max_length=200, description="Search filename, patient name or patient ID"),
+    created_from: datetime | None = Query(None, description="Uploaded at or after (ISO 8601)"),
+    created_to: datetime | None = Query(None, description="Uploaded before (ISO 8601)"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles(ALL_ROLES))
 ) -> Any:
     """
-    Get paginated list of documents
+    Get paginated list of documents, newest first, with optional search and filters.
     """
     query = select(Document)
     if status:
-        query = query.where(Document.status == status)
+        query = query.where(Document.status.in_(status))
+    if q and q.strip():
+        term = q.strip()
+        query = query.where(or_(Document.filename.ilike(_like(term), escape="\\"), _patient_match(term)))
+    if created_from:
+        query = query.where(Document.created_at >= created_from)
+    if created_to:
+        query = query.where(Document.created_at < created_to)
 
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
 
@@ -171,7 +230,31 @@ async def get_document(
     doc = (await db.execute(stmt)).scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    await _log_access(db, "DOCUMENT_VIEWED", doc.id, current_user)
     return doc
+
+@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_document(
+    document_id: uuid.UUID,
+    reason: str = Query(..., min_length=3, max_length=500, description="Why the document is being deleted"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.ADMIN])),
+    storage: StorageService = Depends(get_storage_service)
+):
+    """
+    Permanently delete a document, its files and all derived data (admin only).
+    Audit events are kept with their payloads redacted.
+    """
+    stmt = select(Document).where(Document.id == document_id).with_for_update()
+    doc = (await db.execute(stmt)).scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.status == DocumentStatus.PROCESSING:
+        raise HTTPException(status_code=409, detail="Document is being processed; try again when processing finishes")
+    storage_key = await purge_document(db, doc, actor_id=current_user.id, reason=reason)
+    await db.commit()
+    await storage.delete_document_files(storage_key)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 async def _read_document_bytes(storage: StorageService, doc: Document) -> bytes:
     try:
@@ -193,6 +276,7 @@ async def get_document_file(
     """Download the original uploaded file."""
     doc = await _get_document_or_404(db, document_id)
     data = await _read_document_bytes(storage, doc)
+    await _log_access(db, "DOCUMENT_DOWNLOADED", doc.id, current_user)
     kind = filetype.guess(data)
     return Response(
         content=data,

@@ -1,7 +1,10 @@
 from typing import List, Dict, Any, Tuple, Optional, Iterable
 from src.db.models.extraction import Extraction
 from src.db.models.extracted_field import ExtractedField
-from src.validation.rules import validate_date, validate_numeric_and_range, check_date_consistency
+from src.validation.rules import (
+    validate_date, validate_numeric_and_range, check_date_consistency, normalize_sex, normalize_date,
+    age_in_years, validate_source_agreement,
+)
 from src.validation.confidence import calculate_field_confidence, categorize_confidence
 
 MANDATORY_FIELDS = {
@@ -18,6 +21,10 @@ DATE_FIELDS = {
     "date_of_birth", "collection_date", "received_date"
 }
 
+# Validated when present, but not required (no MISSING entry is created).
+OPTIONAL_FIELDS = {"patient_sex"}
+VALIDATED_FIELDS = MANDATORY_FIELDS | OPTIONAL_FIELDS
+
 # States that mean the value itself is unusable and must be corrected before a human can
 # approve the document. Every other non-VALID state (OUTSIDE_REFERENCE_RANGE,
 # UNRECOGNIZED_UNIT, INCONSISTENT_DATES, SOURCE_MISMATCH) forces human review but can be
@@ -25,13 +32,34 @@ DATE_FIELDS = {
 BLOCKING_STATES = {"MISSING", "INVALID_FORMAT", "IMPLAUSIBLE_VALUE"}
 
 class ValidationEngine:
-    def __init__(self, auto_accept_threshold: float = 0.90):
+    def __init__(self, auto_accept_threshold: float = 0.90, review_recommended: float = 0.90, low_confidence: float = 0.70):
         self.auto_accept_threshold = auto_accept_threshold
+        self.high_threshold = review_recommended
+        self.low_threshold = low_confidence
 
-    def validate_field(self, field_name: str, value: str, unit: Optional[str] = None) -> Tuple[str, List[str], Dict[str, Any], str]:
+    @classmethod
+    def from_thresholds(cls, thresholds: dict) -> "ValidationEngine":
+        return cls(
+            auto_accept_threshold=thresholds["auto_accept"],
+            review_recommended=thresholds["review_recommended"],
+            low_confidence=thresholds["low_confidence"],
+        )
+
+    @staticmethod
+    def build_context(values: Dict[str, Optional[str]]) -> Dict[str, Any]:
+        """Patient context used to pick reference ranges: sex and age at collection."""
+        collected = normalize_date(values.get("collection_date") or "") if values.get("collection_date") else None
+        return {
+            "sex": normalize_sex(values.get("patient_sex")),
+            "age": age_in_years(values.get("date_of_birth"), collected),
+        }
+
+    def validate_field(self, field_name: str, value: str, unit: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Tuple[str, List[str], Dict[str, Any], str]:
         """
         Validates a single field value, returning state, messages, meta, normalized_value.
+        `context` ({"sex", "age"}) selects sex/age-appropriate reference ranges.
         """
+        context = context or {}
         messages = []
         state = "VALID"
         meta = {}
@@ -51,8 +79,14 @@ class ValidationEngine:
                     state = st
                     messages.append(f"Date is in the future: {value}")
 
+            elif field_name == "patient_sex":
+                norm_val = normalize_sex(value)
+                if norm_val is None:
+                    state = "INVALID_FORMAT"
+                    messages.append(f"Unrecognized sex value: {value}")
+
             elif field_name in NUMERIC_FIELDS:
-                st, n_val, m = validate_numeric_and_range(field_name, value, unit)
+                st, n_val, m = validate_numeric_and_range(field_name, value, unit, context.get("sex"), context.get("age"))
                 norm_val = n_val
                 if m:
                     meta = m
@@ -61,10 +95,32 @@ class ValidationEngine:
                     if st == "INVALID_FORMAT":
                         messages.append(f"Invalid numeric format: {value}")
                     elif st == "OUTSIDE_REFERENCE_RANGE":
-                        messages.append(f"Value {n_val} is outside reference range ({meta.get('lower')} - {meta.get('upper')} {meta.get('canonical_unit', '')})".rstrip() )
+                        messages.append(
+                            f"Value {n_val} is outside the {meta.get('range_basis', 'adult')} reference range "
+                            f"({meta.get('lower')} - {meta.get('upper')} {meta.get('canonical_unit', '')})".rstrip()
+                        )
                     elif st == "UNRECOGNIZED_UNIT":
                         messages.append(f"Unrecognized unit '{unit}'; expected {meta.get('expected_unit')}")
+                    elif st == "NO_REFERENCE_RANGE":
+                        messages.append(f"Adult reference ranges do not apply (age {context.get('age')}); verify against the report's own range")
         return state, messages, meta, norm_val
+
+    @staticmethod
+    def _found_in_source(field: ExtractedField, document_data: Optional[Dict[str, Any]]) -> bool:
+        """
+        Checks the value against the OCR/native text of the field's page (all pages when the
+        page is unknown). Without page text (e.g. review re-validation) the check is skipped.
+        """
+        pages = (document_data or {}).get("pages") or []
+        if not pages or not field.value:
+            return True
+        relevant = [p for p in pages if field.page_num and p.get("page_number") == field.page_num] or pages
+        text = " ".join(
+            " ".join(w.get("text", "") for w in p.get("words", [])) or p.get("text", "") for p in relevant
+        )
+        if not text.strip():
+            return True
+        return validate_source_agreement(field.value, text)
 
     def check_cross_field(self, fields: Iterable[Tuple[str, str, Optional[str]]]) -> Dict[str, str]:
         """
@@ -104,15 +160,22 @@ class ValidationEngine:
                 extraction.extracted_fields.append(new_field)
                 extracted_fields_map[req_field] = new_field
 
-        mandatory = [f for f in extraction.extracted_fields if f.field_name in MANDATORY_FIELDS]
+        mandatory = [f for f in extraction.extracted_fields if f.field_name in VALIDATED_FIELDS]
+        values = {}
+        for f in extraction.extracted_fields:
+            values.setdefault(f.field_name, f.value)
+        context = self.build_context(values)
 
         # Pass 1: per-field validation
         for field in mandatory:
-            state, messages, meta, norm_val = self.validate_field(field.field_name, field.value, field.unit)
+            state, messages, meta, norm_val = self.validate_field(field.field_name, field.value, field.unit, context)
 
             if document_data and document_data.get("mock_mismatch", {}).get(field.field_name):
                 state = "SOURCE_MISMATCH"
                 messages.append("Extracted value does not match source text")
+            elif state != "MISSING" and not self._found_in_source(field, document_data):
+                state = "SOURCE_MISMATCH"
+                messages.append("Extracted value was not found in the document text")
 
             field.normalized_value = norm_val
             field.validation_state = state
@@ -134,7 +197,7 @@ class ValidationEngine:
             base_conf = field.confidence if field.confidence is not None else 0.0
             new_conf = calculate_field_confidence(base_conf, state, source_mismatch)
             field.confidence = new_conf # store as 0.0-1.0
-            field.confidence_category = categorize_confidence(new_conf)
+            field.confidence_category = categorize_confidence(new_conf, self.high_threshold, self.low_threshold)
             field.is_valid = state == "VALID"
 
             if field.confidence_category == "LOW":

@@ -25,6 +25,20 @@ class StorageBackend(ABC):
         pass
 
     @abstractmethod
+    async def get_artifact(self, key: str) -> str:
+        """
+        Retrieves an artifact previously stored with upload_artifact.
+        """
+        pass
+
+    @abstractmethod
+    async def delete_artifact(self, key: str) -> bool:
+        """
+        Deletes an artifact.
+        """
+        pass
+
+    @abstractmethod
     async def delete_file(self, key: str) -> bool:
         """
         Deletes a file from the storage backend.
