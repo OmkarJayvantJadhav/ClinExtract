@@ -3,6 +3,7 @@ Seed development users.
 
     python scripts/seed_users.py            # create missing users, leave existing passwords alone
     python scripts/seed_users.py --reset    # also reset existing users' passwords
+    python scripts/seed_users.py --reset --user admin   # only the listed user(s)
 
 Passwords come from *_SEED_PASSWORD environment variables; the dev defaults are only for local use.
 """
@@ -20,7 +21,7 @@ from src.db.models.user import User, UserRole
 from src.utils.security import get_password_hash
 from sqlalchemy import select
 
-async def seed(reset_passwords: bool):
+async def seed(reset_passwords: bool, only_users: list[str] | None = None):
     reviewer_pw = os.getenv("REVIEWER_SEED_PASSWORD", "devpass_reviewer")
     roles_to_seed = [
         ("admin", UserRole.ADMIN, os.getenv("ADMIN_SEED_PASSWORD", "devpass_admin")),
@@ -30,6 +31,11 @@ async def seed(reset_passwords: bool):
         ("operator", UserRole.OPERATOR, os.getenv("OPERATOR_SEED_PASSWORD", "devpass_operator")),
         ("viewer", UserRole.VIEWER, os.getenv("VIEWER_SEED_PASSWORD", "devpass_viewer")),
     ]
+
+    if only_users:
+        roles_to_seed = [r for r in roles_to_seed if r[0] in only_users]
+        if not roles_to_seed:
+            raise SystemExit(f"No seed users match {only_users}")
 
     if settings.APP_ENV == "production" and any(pw.startswith("devpass_") for _, _, pw in roles_to_seed):
         raise SystemExit("Refusing to seed default dev passwords with APP_ENV=production; set *_SEED_PASSWORD variables.")
@@ -60,7 +66,8 @@ async def seed(reset_passwords: bool):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--reset", action="store_true", help="reset passwords of users that already exist")
+    parser.add_argument("--user", action="append", help="only seed/reset this username (repeatable)")
     args = parser.parse_args()
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(seed(args.reset))
+    asyncio.run(seed(args.reset, args.user))
