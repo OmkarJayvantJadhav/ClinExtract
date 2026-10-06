@@ -28,7 +28,7 @@ export function Analytics() {
   const { data: analytics, isLoading } = useQuery({
     queryKey: ['analytics'],
     queryFn: getAnalytics,
-    enabled: user?.role === 'ADMIN' || user?.role === 'SUPERVISOR',
+    enabled: user?.role === 'ADMIN',
     refetchInterval: 60000
   });
 

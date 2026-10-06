@@ -8,6 +8,8 @@ from src.worker.celery_app import celery_app
 import asyncio
 import aio_pika
 from src.core.config import settings
+from src.api.deps import get_current_user
+from src.db.models.user import User
 
 router = APIRouter()
 
@@ -20,7 +22,11 @@ async def check_health():
     )
 
 @router.get("/detailed", response_model=Dict[str, Any])
-async def check_health_detailed(db: AsyncSession = Depends(get_db)):
+async def check_health_detailed(
+    db: AsyncSession = Depends(get_db),
+    # Infrastructure details are not public; any signed-in user may view them
+    current_user: User = Depends(get_current_user),
+):
     status_db = "unavailable"
     status_rmq = "unavailable"
     status_worker = "unavailable"

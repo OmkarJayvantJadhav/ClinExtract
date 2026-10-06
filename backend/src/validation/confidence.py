@@ -16,7 +16,7 @@ def calculate_field_confidence(
     extraction_quality = 1.0 # For rule-based, if it matched, it's 1.0
     
     validation_factor = 1.0
-    if validation_state in ["INVALID_FORMAT", "MISSING"]:
+    if validation_state in ["INVALID_FORMAT", "MISSING", "IMPLAUSIBLE_VALUE"]:
         validation_factor = 0.5
     elif validation_state == "OUTSIDE_REFERENCE_RANGE":
         # Out of range doesn't mean low confidence in the extraction itself, but it implies abnormality

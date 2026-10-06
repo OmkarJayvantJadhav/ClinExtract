@@ -1,7 +1,10 @@
 import logging
 import sys
 import contextvars
-from pythonjsonlogger import jsonlogger
+try:
+    from pythonjsonlogger import json as jsonlogger  # python-json-logger >= 3
+except ImportError:  # pragma: no cover
+    from pythonjsonlogger import jsonlogger
 
 # Context variables for logging correlation
 correlation_id_var = contextvars.ContextVar('correlation_id', default=None)

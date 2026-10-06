@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from src.extraction.base import BaseExtractor
-from src.extraction.schemas import ExtractionResult, CLINICAL_EXTRACTION_PROMPT_VERSION
+from src.extraction.schemas import ExtractionResult, CLINICAL_EXTRACTION_PROMPT_VERSION, build_field_instructions
 from src.extraction.providers.base_provider import BaseAIProvider
 from src.core.config import settings
 from src.extraction.image_preparation import prepare_page_images
@@ -24,7 +24,8 @@ class VLMExtractor(BaseExtractor):
         
         for page_img in page_images:
             page_num = page_img["page_num"]
-            b64_image = page_img["base64"]
+            img_bytes = page_img["bytes"]
+            img_mime = page_img["mime_type"]
             
             prompt = self._build_prompt(document_data, page_num)
             
@@ -32,7 +33,8 @@ class VLMExtractor(BaseExtractor):
                 page_result: ExtractionResult = self.provider.generate_structured(
                     prompt=prompt,
                     schema=ExtractionResult,
-                    image_data=b64_image
+                    image_data=img_bytes,
+                    image_mime_type=img_mime
                 )
                 
                 # Enforce provenance and page_num deterministic assignment
@@ -57,11 +59,12 @@ class VLMExtractor(BaseExtractor):
         return final_result
 
     def _build_prompt(self, document_data: Dict[str, Any], page_num: int) -> str:
-        prompt = f"""
-        Extract the following clinical fields from the provided document image for page {page_num}.
-        Do not infer missing values. Do not fabricate patient information.
-        Preserve source values exactly before normalization.
-        Return null/missing when a field cannot be established.
-        Never invent bounding boxes.
-        """
+        prompt = (
+            f"Extract the following clinical fields from the provided document image (page {page_num}).\n"
+            "Do not infer missing values. Do not fabricate patient information.\n"
+            "Preserve source values exactly before normalization.\n"
+            "Return null when a field cannot be established on this page.\n"
+            "Never invent bounding boxes.\n\n"
+            f"{build_field_instructions()}"
+        )
         return prompt
