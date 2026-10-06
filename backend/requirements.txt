@@ -23,3 +23,6 @@ Pillow==12.3.0
 google-genai==2.28.0
 python-json-logger==4.2.0
 aio-pika==10.1.0
+# Encryption of stored documents at rest, and Prometheus metrics
+cryptography==50.0.2
+prometheus-client==0.26.0

@@ -1,0 +1,15 @@
+# Production image: build static assets, then serve them with Caddy, which also
+# reverse-proxies /api to the backend and terminates TLS (automatic HTTPS).
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+# Same-origin API: the browser calls /api/v1 on the site itself (no CORS needed)
+ENV VITE_API_BASE_URL=/api/v1
+RUN npm run build
+
+FROM caddy:2-alpine
+COPY Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /app/dist /srv
+EXPOSE 80 443

@@ -1,16 +1,21 @@
-import React from 'react';
-import { useParams, Link } from 'react-router-dom';
+import React, { useState } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { fetchApi, getDocumentAudit, apiUrl } from '@/services/apiClient';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { DocumentStatusBadge, ConfidenceIndicator } from '@/components/common/StatusPrimitives';
 import { EmptyState } from '@/components/common/FeedbackStates';
-import { ArrowLeft, Edit, Clock, Download, Loader2, User } from 'lucide-react';
+import { ArrowLeft, Edit, Clock, Download, Loader2, User, Trash2 } from 'lucide-react';
+import { DeleteDocumentDialog } from '@/features/documents/DeleteDocumentDialog';
+import { useAuth } from '@/context/AuthContext';
 import { ProcessingStatus } from './ProcessingStatus';
 
 export function DocumentDetails() {
   const { id } = useParams();
+  const navigate = useNavigate();
+  const { hasRole } = useAuth();
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   // Real API Fetch with Polling
   const { data: doc, isLoading, error } = useQuery({
@@ -74,6 +79,12 @@ export function DocumentDetails() {
               <Download className="h-4 w-4 mr-2" /> Original File
             </a>
           </Button>
+          {hasRole('ADMIN') && (
+            <Button variant="outline" size="sm" className="text-destructive border-destructive/30 hover:bg-destructive/10"
+              disabled={doc.status === 'PROCESSING'} onClick={() => setDeleteOpen(true)}>
+              <Trash2 className="h-4 w-4 mr-2" /> Delete
+            </Button>
+          )}
           {(doc.status === 'REVIEW_REQUIRED' || doc.status === 'REVIEW_IN_PROGRESS') && (
             <Button size="sm" asChild>
               <Link to={`/review/workspace/${doc.id}`}>
@@ -207,6 +218,13 @@ export function DocumentDetails() {
 
         </div>
       </div>
+      <DeleteDocumentDialog
+        key={deleteOpen ? 'open' : 'closed'}
+        document={doc}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onDeleted={() => navigate('/documents')}
+      />
     </div>
   );
 }

@@ -15,7 +15,8 @@ from src.db.models.extraction import Extraction
 from src.db.models.extracted_field import ExtractedField
 from src.schemas.review import ReviewResponse, ReviewCompleteRequest
 from src.services.audit import log_audit_event, RESOURCE_DOCUMENT, RESOURCE_EXTRACTED_FIELD
-from src.validation.engine import ValidationEngine, BLOCKING_STATES, MANDATORY_FIELDS
+from src.validation.engine import ValidationEngine, BLOCKING_STATES, VALIDATED_FIELDS
+from src.services.system_settings import get_thresholds
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
 
@@ -170,12 +171,16 @@ async def complete_review(
 
     # Re-validate the final values. Only unusable values block approval; abnormal-but-valid
     # results (e.g. OUTSIDE_REFERENCE_RANGE) are confirmed by the reviewer's approval.
-    engine = ValidationEngine()
+    engine = ValidationEngine.from_thresholds(await get_thresholds(db))
+    values_by_name = {}
+    for field in extraction.extracted_fields:
+        values_by_name.setdefault(field.field_name, current_values[field.id])
+    context = engine.build_context(values_by_name)
     results = {}
     for field in extraction.extracted_fields:
-        if field.field_name not in MANDATORY_FIELDS:
+        if field.field_name not in VALIDATED_FIELDS:
             continue
-        results[field.id] = engine.validate_field(field.field_name, current_values[field.id], field.unit)
+        results[field.id] = engine.validate_field(field.field_name, current_values[field.id], field.unit, context)
 
     inconsistencies = engine.check_cross_field(
         (fields_by_id[fid].field_name, res[0], res[3]) for fid, res in results.items()

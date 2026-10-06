@@ -5,10 +5,9 @@ from .service import StorageService
 __all__ = ['StorageBackend', 'LocalVolumeStorage', 'StorageService', 'get_storage_service']
 
 def get_storage_service() -> StorageService:
-    # Later this could read from config to pick Local vs S3
     import os
-    # Default local directory inside docker is /data/documents or something.
-    # We will use /tmp/clinextract_data for local development, or mapped volume.
+    from src.core.config import settings
+    # Mapped Docker volume by default; override with STORAGE_DIR for local development.
     storage_dir = os.getenv("STORAGE_DIR", "/app/data/documents")
-    backend = LocalVolumeStorage(base_dir=storage_dir)
+    backend = LocalVolumeStorage(base_dir=storage_dir, encryption_key=settings.DOCUMENT_ENCRYPTION_KEY)
     return StorageService(backend=backend)

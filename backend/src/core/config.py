@@ -29,6 +29,36 @@ class Settings(BaseSettings):
     # Upper bound on pages processed per document (protects the worker from huge PDFs).
     MAX_DOCUMENT_PAGES: int = 50
 
+    # --- Compliance ---
+    # Fernet key used to encrypt stored documents and OCR artifacts at rest.
+    # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Required when APP_ENV=production. Without it (development only) files are stored unencrypted.
+    DOCUMENT_ENCRYPTION_KEY: str | None = None
+    # Finalized documents (approved/rejected/auto-accepted/failed) older than this are purged
+    # by the scheduled retention task. 0 disables automatic purging.
+    DOCUMENT_RETENTION_DAYS: int = 0
+    # External AI providers (Gemini) receive document content. They are refused unless this is
+    # explicitly enabled, which should only happen under an appropriate data-processing agreement.
+    ALLOW_EXTERNAL_AI_PHI: bool = False
+    # Repeated views of the same document by the same user within this window are logged once.
+    VIEW_AUDIT_THROTTLE_MINUTES: int = 5
+
+    # --- Authentication hardening ---
+    LOGIN_MAX_FAILED_ATTEMPTS: int = 5
+    LOGIN_LOCKOUT_MINUTES: int = 15
+    # Per-client-IP login attempts allowed per minute (per API process)
+    LOGIN_RATE_LIMIT_PER_MINUTE: int = 20
+    PASSWORD_MIN_LENGTH: int = 12
+    # Mark cookies Secure. Defaults to True in production; set explicitly when serving over HTTPS elsewhere.
+    COOKIE_SECURE: bool | None = None
+    # Only enable behind the bundled reverse proxy, which sets X-Real-IP; otherwise clients could spoof it.
+    TRUST_PROXY_HEADERS: bool = False
+
+    # --- Observability ---
+    # Bearer token for GET /api/v1/health/metrics. Without it the endpoint is open in
+    # development and disabled in production.
+    METRICS_TOKEN: str | None = None
+
     # Extraction configuration
     EXTRACTION_PROVIDER: str = "rule_based"
     EXTRACTION_FALLBACK_ENABLED: bool = False
@@ -51,9 +81,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _require_real_secret_in_production(self):
-        if self.APP_ENV == "production" and self.JWT_SECRET == INSECURE_DEFAULT_JWT_SECRET:
-            raise ValueError("JWT_SECRET must be set to a strong random value when APP_ENV=production")
+        if self.APP_ENV == "production":
+            if self.JWT_SECRET == INSECURE_DEFAULT_JWT_SECRET or len(self.JWT_SECRET) < 32:
+                raise ValueError("JWT_SECRET must be a strong random value (>= 32 chars) when APP_ENV=production")
+            if not self.DOCUMENT_ENCRYPTION_KEY:
+                raise ValueError("DOCUMENT_ENCRYPTION_KEY must be set when APP_ENV=production")
         return self
+
+    @property
+    def cookie_secure(self) -> bool:
+        return self.COOKIE_SECURE if self.COOKIE_SECURE is not None else self.APP_ENV == "production"
 
     @property
     def parsed_cors_origins(self) -> List[str]:
