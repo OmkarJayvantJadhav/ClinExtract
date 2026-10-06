@@ -1,7 +1,7 @@
 import re
 from datetime import datetime, date, timezone
 from typing import Dict, Tuple, Optional
-from src.validation.reference_ranges import REFERENCE_RANGES, UNIT_CONVERSIONS, RAW_COUNT_THRESHOLD
+from src.validation.reference_ranges import UNIT_CONVERSIONS, RAW_COUNT_THRESHOLD, canonical_unit, get_reference_range
 
 COUNT_FIELDS = {"white_blood_cell_count", "platelet_count"}
 
@@ -15,7 +15,7 @@ def parse_date(val: str) -> Optional[date]:
     val = normalize_text(val)
     # ISO first, then US MM/DD/YYYY, then DD/MM/YYYY (only reachable when the day is > 12,
     # i.e. the value cannot be a valid US date).
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"):
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y", "%d.%m.%Y"):
         try:
             return datetime.strptime(val, fmt).date()
         except ValueError:
@@ -58,12 +58,14 @@ def _format_number(num: float) -> str:
     num = round(num, 3)
     return str(int(num)) if float(num).is_integer() else str(num)
 
-def validate_numeric_and_range(field_name: str, val: str, unit: Optional[str] = None) -> Tuple[str, Optional[str], Optional[Dict]]:
+def validate_numeric_and_range(
+    field_name: str, val: str, unit: Optional[str] = None, sex: Optional[str] = None, age: Optional[int] = None
+) -> Tuple[str, Optional[str], Optional[Dict]]:
     num = normalize_numeric(val)
     if num is None:
         return "INVALID_FORMAT", None, None
 
-    ref = REFERENCE_RANGES.get(field_name)
+    expected_unit = canonical_unit(field_name)
     meta: Dict = {}
     conversions = UNIT_CONVERSIONS.get(field_name, {})
     norm_unit = normalize_unit(unit)
@@ -72,7 +74,7 @@ def validate_numeric_and_range(field_name: str, val: str, unit: Optional[str] = 
         factor = conversions.get(norm_unit)
         if factor is None:
             # We cannot compare against the reference range without knowing the scale.
-            meta = {"value": num, "unit": unit, "expected_unit": ref["unit"] if ref else None}
+            meta = {"value": num, "unit": unit, "expected_unit": expected_unit}
             return "UNRECOGNIZED_UNIT", _format_number(num), meta
         if factor != 1.0:
             meta["original_value"] = num
@@ -85,13 +87,42 @@ def validate_numeric_and_range(field_name: str, val: str, unit: Optional[str] = 
 
     norm_str = _format_number(num)
 
-    if ref:
-        meta["canonical_unit"] = ref["unit"]
-        if num < ref["min"] or num > ref["max"]:
-            meta.update({"value": round(num, 3), "lower": ref["min"], "upper": ref["max"]})
+    if expected_unit:
+        meta["canonical_unit"] = expected_unit
+        ref = get_reference_range(field_name, sex, age)
+        if ref is None:
+            meta["reason"] = f"no adult reference range applies (age {age})"
+            return "NO_REFERENCE_RANGE", norm_str, meta
+        lower, upper, basis = ref
+        meta["range_basis"] = basis
+        if num < lower or num > upper:
+            meta.update({"value": round(num, 3), "lower": lower, "upper": upper})
             return "OUTSIDE_REFERENCE_RANGE", norm_str, meta
 
     return "VALID", norm_str, (meta or None)
+
+def normalize_sex(val: Optional[str]) -> Optional[str]:
+    v = normalize_text(val or "").lower()
+    if v in ("m", "male", "man"):
+        return "M"
+    if v in ("f", "female", "woman"):
+        return "F"
+    return None
+
+def age_in_years(dob: Optional[str], on: Optional[str] = None) -> Optional[int]:
+    """Age in whole years on the given ISO date (default: today); None if unknown."""
+    birth = parse_date(dob) if dob else None
+    if not birth:
+        return None
+    ref = parse_date(on) if on else None
+    ref = ref or datetime.now(timezone.utc).date()
+    years = ref.year - birth.year - ((ref.month, ref.day) < (birth.month, birth.day))
+    return years if years >= 0 else None
+
+_NON_ALNUM = re.compile(r"[^0-9a-z]+")
+
+def _squash(text: str) -> str:
+    return _NON_ALNUM.sub("", (text or "").lower())
 
 def check_date_consistency(dates: Dict[str, Optional[str]]) -> Dict[str, str]:
     """
@@ -111,7 +142,12 @@ def check_date_consistency(dates: Dict[str, Optional[str]]) -> Dict[str, str]:
     return problems
 
 def validate_source_agreement(extracted: str, source_text: str) -> bool:
-    # Placeholder: source agreement is currently only exercised through the
-    # `mock_mismatch` hook used by tests. A real implementation should compare the
-    # extracted value with the OCR words under the field's bounding box.
-    return True
+    """
+    True when the extracted value appears in the source text, ignoring case, whitespace and
+    punctuation (so "250,000" matches "250000" and "O'Brien" matches "OBrien"). Used to catch
+    values an AI extractor produced that are not actually printed on the page.
+    """
+    value = _squash(extracted)
+    if not value:
+        return True
+    return value in _squash(source_text)

@@ -39,7 +39,21 @@ async def _create_test_schema():
                 exists = (await session.execute(select(User).where(User.username == username))).scalar_one_or_none()
                 if not exists:
                     session.add(User(username=username, password_hash=get_password_hash(password), role=role, is_active=True))
+                else:
+                    # Start every run from a known state (earlier runs may have locked/changed these)
+                    exists.password_hash = get_password_hash(password)
+                    exists.failed_login_count = 0
+                    exists.locked_until = None
+                    exists.is_active = True
+                    exists.role = role
             await session.commit()
+    yield
+
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limit():
+    # The suite logs in far more often than the per-IP production limit allows
+    from src.api.routes.auth import login_limiter
+    login_limiter.reset()
     yield
 
 @pytest.fixture

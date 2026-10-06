@@ -1,0 +1,33 @@
+# SITE_ADDRESS: your domain (e.g. clinextract.example.org) for automatic Let's Encrypt HTTPS,
+# or "localhost" for a locally trusted self-signed certificate.
+{$SITE_ADDRESS:localhost} {
+	encode zstd gzip
+
+	# Metrics are for the internal Prometheus scraper only (more specific handle blocks win)
+	handle /api/v1/health/metrics {
+		respond 404
+	}
+
+	handle /api/* {
+		reverse_proxy backend:8000 {
+			# The backend trusts X-Real-IP (TRUST_PROXY_HEADERS=true) for rate limiting and audit
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+		-Server
+	}
+}

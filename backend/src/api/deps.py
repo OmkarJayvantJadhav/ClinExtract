@@ -67,6 +67,13 @@ async def get_current_user(
             detail="User not found or inactive",
         )
 
+    # Tokens issued before a password change / deactivation / "log out everywhere" are revoked
+    if payload.get("ver", 0) != (user.token_version or 0):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has been revoked",
+        )
+
     return user
 
 

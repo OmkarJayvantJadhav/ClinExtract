@@ -30,9 +30,9 @@ def calculate_field_confidence(
     final_conf = src_conf * extraction_quality * validation_factor * source_agreement
     return round(min(max(final_conf, 0.0), 1.0), 4)
 
-def categorize_confidence(conf: float) -> str:
-    if conf >= 0.90:
+def categorize_confidence(conf: float, high_threshold: float = 0.90, low_threshold: float = 0.70) -> str:
+    if conf >= high_threshold:
         return "HIGH"
-    if conf >= 0.70:
+    if conf >= low_threshold:
         return "REVIEW_RECOMMENDED"
     return "LOW"

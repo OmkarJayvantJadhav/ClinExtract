@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { apiUrl, getCsrfToken } from '@/services/apiClient';
+import { queryClient } from '@/lib/queryClient';
 
 const AuthContext = createContext(null);
 
@@ -50,8 +51,14 @@ export function AuthProvider({ children }) {
       });
       
       if (!response.ok) {
-        throw new Error(response.status === 401 ? 'Invalid username or password' : `Login failed (${response.status})`);
+        const body = await response.json().catch(() => ({}));
+        const detail = typeof body.detail === 'string' ? body.detail : null;
+        if (response.status === 401) throw new Error('Invalid username or password');
+        // 429: rate limited or account locked; the server explains which
+        throw new Error(detail || `Login failed (${response.status})`);
       }
+      // Never show one user's cached data to the next
+      queryClient.clear();
       
       const data = await response.json();
       setUser(data);
@@ -76,6 +83,7 @@ export function AuthProvider({ children }) {
     } catch (err) {
       console.error('Logout error', err);
     }
+    queryClient.clear();
     setUser(null);
     setIsAuthenticated(false);
   }, []);

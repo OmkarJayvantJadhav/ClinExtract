@@ -139,9 +139,12 @@ async def process_document_async(job_id: str, attempt: int = 1, session_maker: O
     # A failure anywhere here rolls everything back, so a retry starts clean.
     from src.validation.engine import ValidationEngine
 
+    from src.services.system_settings import get_thresholds
+
     async with session_maker() as session:
+        thresholds = await get_thresholds(session)
         extraction = await _extract_with_fallback(session, doc_id_str, artifact, file_bytes)
-        ValidationEngine().validate_extraction(extraction, artifact)
+        ValidationEngine.from_thresholds(thresholds).validate_extraction(extraction, artifact)
         final_decision = extraction.decision
 
         job2 = await session.get(ProcessingJob, job_uuid)
@@ -229,3 +232,18 @@ def process_document_job(self, job_id: str, correlation_id: str = None):
     finally:
         correlation_id_var.reset(t1)
         job_id_var.reset(t2)
+
+async def _purge_expired(session_maker: async_sessionmaker) -> int:
+    from src.services.retention import purge_expired_documents
+    from src.storage import get_storage_service
+    async with session_maker() as session:
+        return await purge_expired_documents(session, get_storage_service(), settings.DOCUMENT_RETENTION_DAYS)
+
+@celery_app.task(name="purge_expired_documents")
+def purge_expired_documents_task():
+    """Scheduled daily by Celery beat; a no-op unless DOCUMENT_RETENTION_DAYS > 0."""
+    if settings.DOCUMENT_RETENTION_DAYS <= 0:
+        return "Retention disabled"
+    removed = _run(_purge_expired(_get_worker_session_maker()))
+    logger.info(f"Retention purge removed {removed} document(s)", extra={"event": "retention_purge"})
+    return f"Purged {removed} document(s)"
