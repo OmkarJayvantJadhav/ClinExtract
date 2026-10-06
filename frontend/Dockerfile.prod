@@ -1,6 +1,6 @@
 # Production image: build static assets, then serve them with Caddy, which also
 # reverse-proxies /api to the backend and terminates TLS (automatic HTTPS).
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
