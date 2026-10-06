@@ -6,48 +6,15 @@ from typing import List
 from src.core.database import get_db
 from src.db.models.user import User, UserRole
 from src.schemas.auth import UserResponse
-from src.api.deps import require_roles, get_current_user
+from src.api.deps import require_roles
 
 router = APIRouter()
 
-@router.get("/admin-only", response_model=List[UserResponse])
-async def list_users_admin(
+@router.get("", response_model=List[UserResponse])
+async def list_users(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles([UserRole.ADMIN]))
 ):
-    stmt = select(User)
-    result = await db.execute(stmt)
+    """List all users (admin only)."""
+    result = await db.execute(select(User).order_by(User.username))
     return result.scalars().all()
-
-@router.get("/reviewer-plus", response_model=List[UserResponse])
-async def list_users_reviewer(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.REVIEWER]))
-):
-    stmt = select(User)
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
-@router.get("/operator-plus", response_model=List[UserResponse])
-async def list_users_operator(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.REVIEWER, UserRole.OPERATOR]))
-):
-    stmt = select(User)
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
-@router.get("/viewer-plus", response_model=List[UserResponse])
-async def list_users_viewer(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    stmt = select(User)
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
-@router.post("/dummy-mutation")
-async def dummy_mutation(
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.REVIEWER, UserRole.OPERATOR]))
-):
-    return {"status": "success"}

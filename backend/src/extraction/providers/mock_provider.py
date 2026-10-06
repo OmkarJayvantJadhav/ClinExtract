@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from src.extraction.providers.base_provider import BaseAIProvider
 
 class MockLLMProvider(BaseAIProvider):
-    def generate_structured(self, prompt: str, schema: Type[BaseModel], image_data: bytes = None) -> BaseModel:
+    def generate_structured(self, prompt: str, schema: Type[BaseModel], image_data: bytes = None, image_mime_type: str = "image/jpeg") -> BaseModel:
         # A deterministic mock provider for testing
         
         if "simulated_failure" in prompt:

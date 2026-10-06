@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from src.extraction.base import BaseExtractor
-from src.extraction.schemas import ExtractionResult, CLINICAL_EXTRACTION_PROMPT_VERSION
+from src.extraction.schemas import ExtractionResult, CLINICAL_EXTRACTION_PROMPT_VERSION, build_field_instructions
 from src.extraction.providers.base_provider import BaseAIProvider
 from src.core.config import settings
 
@@ -41,14 +41,14 @@ class LLMExtractor(BaseExtractor):
             words = [w.get("text", "") for w in page.get("words", [])]
             text_content += " ".join(words) + "\n"
             
-        prompt = f"""
-        Extract the following clinical fields from the provided document text.
-        Do not infer missing values. Do not fabricate patient information.
-        Preserve source values exactly before normalization.
-        Return null/missing when a field cannot be established.
-        Never invent bounding boxes.
-        
-        Document Text:
-        {text_content}
-        """
+        prompt = (
+            "Extract the following clinical fields from the provided document text.\n"
+            "Do not infer missing values. Do not fabricate patient information.\n"
+            "Preserve source values exactly before normalization.\n"
+            "Return null when a field cannot be established.\n"
+            "Never invent bounding boxes.\n\n"
+            f"{build_field_instructions()}\n\n"
+            "Document Text:\n"
+            f"{text_content}"
+        )
         return prompt

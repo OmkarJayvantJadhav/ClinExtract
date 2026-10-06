@@ -8,6 +8,7 @@ class ExtractedFieldResponse(BaseModel):
     id: uuid.UUID
     field_name: str
     value: Optional[str]
+    unit: Optional[str] = None
     original_value: Optional[str] = None
     current_value: Optional[str] = None
     is_corrected: bool = False
@@ -21,6 +22,7 @@ class ExtractedFieldResponse(BaseModel):
     
     @field_validator('confidence', mode='before')
     def scale_confidence(cls, v):
+        # Stored as a 0.0-1.0 fraction after validation; the API exposes percentages.
         if v is not None and v <= 1.0:
             return round(v * 100, 1)
         return v
@@ -61,11 +63,17 @@ class DocumentResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class DocumentListItem(DocumentResponse):
+    # Summary of the current extraction, for list views
+    overall_confidence: Optional[float] = None  # percentage
+    patient_name: Optional[str] = None
+    patient_id: Optional[str] = None
+
 class DocumentDetailResponse(DocumentResponse):
     extractions: List[ExtractionResponse] = []
 
 class PaginatedDocumentResponse(BaseModel):
-    items: List[DocumentResponse]
+    items: List[DocumentListItem]
     total: int
     page: int
     size: int

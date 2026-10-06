@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
 from typing import Dict, Any
@@ -10,30 +10,24 @@ from src.db.models.processing_job import ProcessingJob, JobStatus
 from src.db.models.extraction import Extraction
 from src.db.models.extracted_field import ExtractedField
 from src.db.models.field_correction import FieldCorrection
-from src.api.routes.auth import get_current_user
-from src.schemas.auth import UserResponse
+from src.api.deps import require_roles
+from src.db.models.user import User, UserRole
 
 router = APIRouter()
 
 @router.get("/metrics", response_model=Dict[str, Any])
 async def get_analytics_metrics(
     db: AsyncSession = Depends(get_db),
-    current_user: UserResponse = Depends(get_current_user)
+    # Only admins can see global operational metrics
+    current_user: User = Depends(require_roles([UserRole.ADMIN]))
 ):
-    # Enforce RBAC: Only Admin/Supervisor can see global operational metrics
-    if current_user.role not in ["ADMIN", "SUPERVISOR"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not enough permissions to view analytics"
-        )
-        
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     
     # Documents
     total_docs = await db.scalar(select(func.count()).select_from(Document))
     docs_today = await db.scalar(
         select(func.count()).select_from(Document)
-        .where(Document.uploaded_at >= today)
+        .where(Document.created_at >= today)
     )
     
     # Processing Jobs
@@ -57,10 +51,10 @@ async def get_analytics_metrics(
     
     # Review outcomes
     human_approved = await db.scalar(
-        select(func.count()).select_from(Document).where(Document.status == DocumentStatus.APPROVED)
+        select(func.count()).select_from(Document).where(Document.status == DocumentStatus.HUMAN_APPROVED)
     )
     human_rejected = await db.scalar(
-        select(func.count()).select_from(Document).where(Document.status == DocumentStatus.REJECTED)
+        select(func.count()).select_from(Document).where(Document.status == DocumentStatus.HUMAN_REJECTED)
     )
     
     # Extraction Fallbacks
@@ -79,7 +73,7 @@ async def get_analytics_metrics(
             select(func.count(func.distinct(Extraction.document_id)))
             .select_from(Extraction)
             .join(ExtractedField, ExtractedField.extraction_id == Extraction.id)
-            .join(FieldCorrection, FieldCorrection.field_id == ExtractedField.id)
+            .join(FieldCorrection, FieldCorrection.extracted_field_id == ExtractedField.id)
         )
         correction_rate = docs_with_corrections / completed_reviews
     else:
@@ -102,9 +96,9 @@ async def get_analytics_metrics(
     confidence_distribution_raw = await db.execute(
         select(
             case(
-                (Extraction.confidence_score >= 0.9, '90-100%'),
-                (Extraction.confidence_score >= 0.7, '70-90%'),
-                (Extraction.confidence_score >= 0.5, '50-70%'),
+                (Extraction.overall_confidence >= 0.9, '90-100%'),
+                (Extraction.overall_confidence >= 0.7, '70-90%'),
+                (Extraction.overall_confidence >= 0.5, '50-70%'),
                 else_='<50%'
             ).label('bucket'),
             func.count()
@@ -115,6 +109,8 @@ async def get_analytics_metrics(
     return {
         "documents": {
             "total": total_docs or 0,
+            "uploaded_today": docs_today or 0,
+            # Kept for backwards compatibility with older dashboards
             "processed_today": docs_today or 0
         },
         "processing": {

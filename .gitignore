@@ -17,9 +17,14 @@ build/
 coverage/
 *.log
 
-data/
-documents/
-artifacts/
+# Runtime data directories (anchored so they don't match source folders
+# such as frontend/src/pages/documents/)
+/data/
+/documents/
+/artifacts/
+backend/data/
+backend/documents/
+backend/artifacts/
 
 .vscode/
 .idea/

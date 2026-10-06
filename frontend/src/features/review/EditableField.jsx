@@ -10,7 +10,8 @@ export function EditableField({ field, currentValue, isCorrected, onSelect, onEd
   const [tempValue, setTempValue] = useState(currentValue);
 
   const handleSave = () => {
-    if (tempValue !== field.value) {
+    const original = field.value ?? '';
+    if ((tempValue ?? '') !== original) {
       onEdit(tempValue);
     } else {
       // Reverted to original
@@ -48,7 +49,7 @@ export function EditableField({ field, currentValue, isCorrected, onSelect, onEd
           <ValidationBadge state={displayState} message={!isCorrected && field.validationMessage} />
 
           {/* Confidence Score (Hidden if corrected, since human replaced AI) */}
-          {!isCorrected && (
+          {!isCorrected && field.confidence !== null && field.confidence !== undefined && (
             <span className={cn(
               "text-[10px] font-mono px-1.5 py-0.5 rounded",
               field.confidence >= 90 ? "bg-success/10 text-success-foreground" :
@@ -65,7 +66,7 @@ export function EditableField({ field, currentValue, isCorrected, onSelect, onEd
             <Input 
               autoFocus
               className="h-8 text-sm font-mono border-primary shadow-sm"
-              value={tempValue}
+              value={tempValue ?? ''}
               onChange={(e) => setTempValue(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleSave();
@@ -90,7 +91,7 @@ export function EditableField({ field, currentValue, isCorrected, onSelect, onEd
           >
             <div className="flex items-baseline gap-1.5">
               <span className={cn("text-sm font-mono", isCorrected ? "font-bold text-primary" : "text-foreground")}>
-                {currentValue}
+                {currentValue === null || currentValue === undefined || currentValue === '' ? <span className="italic text-muted-foreground">— not extracted —</span> : currentValue}
               </span>
               {field.unit && <span className="text-xs text-muted-foreground font-mono">{field.unit}</span>}
             </div>
@@ -107,7 +108,7 @@ export function EditableField({ field, currentValue, isCorrected, onSelect, onEd
 
       {isCorrected && !isEditing && (
         <div className="mt-1.5 flex items-center justify-between text-[11px] bg-muted/50 p-1.5 rounded-sm">
-          <span className="text-muted-foreground">Original AI extraction: <span className="line-through font-mono ml-1">{field.value}</span></span>
+          <span className="text-muted-foreground">Original AI extraction: <span className="line-through font-mono ml-1">{field.value ?? '(empty)'}</span></span>
           <Button variant="ghost" size="sm" className="h-5 px-1.5 text-xs text-muted-foreground hover:text-destructive" onClick={handleRevert}>
             <RotateCcw className="h-3 w-3 mr-1" /> Revert
           </Button>

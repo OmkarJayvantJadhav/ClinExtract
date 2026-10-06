@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from src.core.config import settings
 from src.api.routes import health, auth, users, documents, jobs, reviews, analytics, audit
 
 api_router = APIRouter()
@@ -11,3 +12,6 @@ api_router.include_router(reviews.router, tags=["Reviews"])
 api_router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 api_router.include_router(audit.router, prefix="/audit", tags=["Audit"])
 
+if settings.APP_ENV == "testing":
+    from src.api.routes import rbac_probe
+    api_router.include_router(rbac_probe.router, prefix="/users", tags=["Testing"])

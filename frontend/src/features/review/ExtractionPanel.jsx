@@ -16,7 +16,7 @@ export function ExtractionPanel({ extraction, corrections, onFieldSelect, onFiel
               field={field} 
               currentValue={corrections[field.id] !== undefined ? corrections[field.id] : field.value}
               isCorrected={corrections[field.id] !== undefined}
-              onSelect={() => onFieldSelect(field.bbox)}
+              onSelect={() => onFieldSelect(field)}
               onEdit={(val) => onFieldEdit(field.id, val)}
             />
           ))}
