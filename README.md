@@ -170,6 +170,8 @@ PostgreSQL, a migration upgrade/downgrade check, frontend lint/tests/build, and 
 
 ## Production Deployment
 
+**Free hosting with a public link:** see [DEPLOYMENT.md](DEPLOYMENT.md) (Oracle Cloud Always Free + `scripts/deploy.sh`, one command).
+
 `docker-compose.prod.yml` runs the full stack with only the web server exposed:
 
 | Service | Role |
