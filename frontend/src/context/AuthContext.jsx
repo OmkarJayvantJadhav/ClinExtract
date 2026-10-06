@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { apiUrl, getCsrfToken } from '@/services/apiClient';
 
 const AuthContext = createContext(null);
 
@@ -9,7 +10,7 @@ export function AuthProvider({ children }) {
 
   const checkSession = useCallback(async () => {
     try {
-      const response = await fetch('http://localhost:8001/api/v1/auth/me', {
+      const response = await fetch(apiUrl('/auth/me'), {
         headers: { 'Accept': 'application/json' },
         credentials: 'include'
       });
@@ -34,16 +35,10 @@ export function AuthProvider({ children }) {
     checkSession();
   }, [checkSession]);
 
-  const getCsrfToken = () => {
-    const match = document.cookie.match(new RegExp('(^| )clinextract_csrf=([^;]+)'));
-    if (match) return match[2];
-    return '';
-  };
-
   const login = useCallback(async (credentials) => {
     setIsLoading(true);
     try {
-      const response = await fetch('http://localhost:8001/api/v1/auth/login', {
+      const response = await fetch(apiUrl('/auth/login'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -55,8 +50,7 @@ export function AuthProvider({ children }) {
       });
       
       if (!response.ok) {
-        setIsLoading(false);
-        throw new Error('Invalid credentials');
+        throw new Error(response.status === 401 ? 'Invalid username or password' : `Login failed (${response.status})`);
       }
       
       const data = await response.json();
@@ -64,7 +58,6 @@ export function AuthProvider({ children }) {
       setIsAuthenticated(true);
     } catch (error) {
       console.error('Login error', error);
-      setIsLoading(false);
       throw error;
     } finally {
       setIsLoading(false);
@@ -73,7 +66,7 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     try {
-      await fetch('http://localhost:8001/api/v1/auth/logout', { 
+      await fetch(apiUrl('/auth/logout'), { 
         method: 'POST',
         headers: {
           'X-CSRF-Token': getCsrfToken()

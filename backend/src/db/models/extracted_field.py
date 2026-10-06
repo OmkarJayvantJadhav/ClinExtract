@@ -10,6 +10,7 @@ class ExtractedField(BaseModel):
     extraction_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("extractions.id"))
     field_name: Mapped[str] = mapped_column(String)
     value: Mapped[str] = mapped_column(String, nullable=True)
+    unit: Mapped[str] = mapped_column(String, nullable=True)
     
     # Phase 9 fields
     normalized_value: Mapped[str] = mapped_column(String, nullable=True)
@@ -25,7 +26,7 @@ class ExtractedField(BaseModel):
     is_corrected: Mapped[bool] = mapped_column(Boolean, default=False)
 
     extraction = relationship("Extraction", back_populates="extracted_fields")
-    field_corrections = relationship("FieldCorrection", back_populates="extracted_field", order_by="FieldCorrection.created_at")
+    field_corrections = relationship("FieldCorrection", back_populates="extracted_field", order_by="FieldCorrection.created_at", cascade="all, delete-orphan")
 
     @property
     def current_value(self) -> str:

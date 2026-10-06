@@ -8,8 +8,8 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { HeartPulse, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 
 export function Login() {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('password123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const { login, isLoading } = useAuth();
@@ -22,7 +22,7 @@ export function Login() {
       await login({ username, password });
       navigate('/dashboard');
     } catch (err) {
-      setError('Invalid username or password.');
+      setError(err?.message === 'Failed to fetch' ? 'Cannot reach the server. Please try again.' : (err?.message || 'Invalid username or password.'));
     }
   };
 

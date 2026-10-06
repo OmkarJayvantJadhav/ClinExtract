@@ -41,7 +41,24 @@ class StorageService:
         Reads the file, validates it, and stores it using the backend.
         Returns (storage_key, mime_type, file_size).
         """
-        file_bytes = await upload_file.read()
+        # Fail fast on an honest size declaration, then enforce the limit while reading so
+        # an oversized body is never held in memory in full.
+        if upload_file.size is not None and upload_file.size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="File exceeds maximum size of 10MB."
+            )
+        chunks = []
+        total = 0
+        while chunk := await upload_file.read(1024 * 1024):
+            total += len(chunk)
+            if total > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail="File exceeds maximum size of 10MB."
+                )
+            chunks.append(chunk)
+        file_bytes = b"".join(chunks)
         mime_type = self.validate_file(file_bytes, upload_file.filename)
         
         # Reset the stream position for the backend

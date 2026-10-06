@@ -14,7 +14,7 @@ class GeminiProvider(BaseAIProvider):
             from google import genai
             self.client = genai.Client(api_key=self.api_key)
 
-    def generate_structured(self, prompt: str, schema: Type[BaseModel], image_data: Any = None) -> BaseModel:
+    def generate_structured(self, prompt: str, schema: Type[BaseModel], image_data: Any = None, image_mime_type: str = "image/jpeg") -> BaseModel:
         if not self.client:
             raise NonRetryableExtractionError("GEMINI_API_KEY is not configured.")
 
@@ -28,11 +28,14 @@ class GeminiProvider(BaseAIProvider):
         contents = []
         if image_data:
             from google.genai import types
-            # image_data is expected to be bytes
+            if isinstance(image_data, str):
+                # Accept base64 for backwards compatibility, but the SDK needs raw bytes.
+                import base64
+                image_data = base64.b64decode(image_data)
             contents.append(
                 types.Part.from_bytes(
                     data=image_data,
-                    mime_type="image/jpeg",
+                    mime_type=image_mime_type,
                 )
             )
         contents.append(prompt)

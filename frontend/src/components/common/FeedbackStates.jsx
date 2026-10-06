@@ -36,7 +36,7 @@ export function EmptyState({ title = "No data found", message, action, icon: Ico
       </div>
       <h3 className="text-lg font-semibold text-foreground mb-2">{title}</h3>
       {message && <p className="text-sm text-muted-foreground mb-6 max-w-sm">{message}</p>}
-      {action && action}
+      {action}
     </div>
   );
 }

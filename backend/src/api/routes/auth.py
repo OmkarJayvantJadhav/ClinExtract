@@ -9,10 +9,10 @@ from src.schemas.auth import UserLogin, UserResponse
 from src.utils.security import verify_password, create_access_token
 from src.api.deps import get_current_user
 
-router = APIRouter()
-
 import secrets
 from src.core.config import settings
+
+router = APIRouter()
 
 @router.post("/login", response_model=UserResponse)
 async def login(
@@ -52,7 +52,7 @@ async def login(
         httponly=True,
         secure=is_production,
         samesite="strict",
-        max_age=24 * 60 * 60, # 1 day
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
     
     # Set non-HttpOnly Cookie for CSRF
@@ -62,18 +62,18 @@ async def login(
         httponly=False,
         secure=is_production,
         samesite="strict",
-        max_age=24 * 60 * 60, # 1 day
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
     return user
 
 @router.post("/logout")
-async def logout(
-    response: Response,
-    current_user: User = Depends(get_current_user)
-):
-    response.delete_cookie("access_token")
-    response.delete_cookie("clinextract_csrf")
+async def logout(response: Response):
+    # No authentication required: an expired session must still be able to clear its cookies.
+    # (Clearing cookies is harmless, and SameSite=strict prevents cross-site triggering.)
+    is_production = settings.APP_ENV == "production"
+    response.delete_cookie("access_token", httponly=True, secure=is_production, samesite="strict")
+    response.delete_cookie("clinextract_csrf", secure=is_production, samesite="strict")
     return {"detail": "Successfully logged out"}
 
 @router.get("/me", response_model=UserResponse)

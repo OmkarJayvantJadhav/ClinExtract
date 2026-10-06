@@ -76,11 +76,21 @@ To use the default deterministic rule-based extractor:
 EXTRACTION_PROVIDER=rule_based
 ```
 
-To enable the optional Gemini AI extractor:
+To enable the optional Gemini AI extractor (text-based LLM over the OCR output, or the
+vision model over page images):
 ```env
-EXTRACTION_PROVIDER=gemini
+EXTRACTION_PROVIDER=llm        # or: vlm
+LLM_PROVIDER=gemini            # or, for vlm: VLM_PROVIDER=gemini
 GEMINI_API_KEY=your_api_key_here
+EXTRACTION_FALLBACK_ENABLED=true   # fall back to the rule-based extractor if Gemini fails
 ```
+
+> **Patient data:** the Gemini extractors send document content to Google. Only enable them
+> under an appropriate data-processing agreement (e.g. a HIPAA BAA) for your deployment.
+
+Put these in a `.env` file next to `docker-compose.yml`. For any deployment beyond your own
+machine also set `JWT_SECRET` (the API refuses to start with `APP_ENV=production` and the
+default secret), `POSTGRES_PASSWORD`, `RABBITMQ_USER` and `RABBITMQ_PASSWORD`.
 
 ## Running the Project
 
@@ -94,11 +104,31 @@ GEMINI_API_KEY=your_api_key_here
    ```
 
 - **Frontend Application:** `http://localhost:5173`
-- **Backend API Docs:** `http://localhost:8000/docs`
+- **Backend API Docs:** `http://localhost:8001/api/v1/docs`
+
+If a port is already taken by another project, override the host ports in `.env` (or the shell):
+```env
+FRONTEND_HOST_PORT=5174    # default 5173
+BACKEND_HOST_PORT=8001
+DB_HOST_PORT=5434          # default 5433
+RABBITMQ_HOST_PORT=5672
+RABBITMQ_UI_HOST_PORT=15672
+```
+CORS and the frontend's API URL follow these values automatically.
+
+## Local Development (without Docker)
+
+Create one virtual environment from the pinned requirements:
+```bash
+cd backend
+python -m venv .venv
+.venv/Scripts/python -m pip install -r requirements.txt   # Windows; use .venv/bin/python on macOS/Linux
+```
 
 ## Database
 
-Apply the latest database migrations by running Alembic inside the backend container:
+The backend container applies pending Alembic migrations automatically on start-up. To run
+them by hand:
 ```bash
 docker compose exec backend alembic upgrade head
 ```
@@ -109,6 +139,7 @@ To bootstrap the application with development users (Administrator, Reviewer, Op
 ```bash
 docker compose exec backend python scripts/seed_users.py
 ```
+Existing users are left untouched; pass `--reset` to reset their passwords.
 *Note: This script provides pre-configured development credentials for local testing. These passwords must not be used in a production environment.*
 
 ## Testing
@@ -117,6 +148,12 @@ docker compose exec backend python scripts/seed_users.py
 Run the complete Pytest suite with async and regression testing:
 ```bash
 docker compose exec backend pytest
+```
+To keep test data out of the development database, create a separate database and point the
+suite at it with `TEST_DATABASE_URL` (tables are created automatically):
+```bash
+docker compose exec db createdb -U postgres clinextract_test
+docker compose exec -e TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/clinextract_test backend pytest
 ```
 
 **Frontend:**
