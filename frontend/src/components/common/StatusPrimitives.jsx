@@ -11,8 +11,12 @@ export function DocumentStatusBadge({ status }) {
         return { label: 'Human Approved', className: 'bg-primary/15 text-primary border-primary/30', icon: ShieldCheck };
       case 'REVIEW_REQUIRED':
         return { label: 'Review Required', className: 'bg-warning/15 text-warning-foreground border-warning/30', icon: AlertTriangle };
+      case 'REVIEW_IN_PROGRESS':
+        return { label: 'In Review', className: 'bg-warning/15 text-warning-foreground border-warning/30', icon: ShieldCheck };
       case 'PROCESSING':
         return { label: 'Processing', className: 'bg-info/15 text-info-foreground border-info/30', icon: HelpCircle };
+      case 'UPLOADED':
+        return { label: 'Queued', className: 'bg-info/15 text-info-foreground border-info/30', icon: HelpCircle };
       case 'FAILED':
       case 'HUMAN_REJECTED':
         return { label: status === 'FAILED' ? 'Failed' : 'Rejected', className: 'bg-destructive/15 text-destructive border-destructive/30', icon: XCircle };
@@ -77,6 +81,7 @@ export function ValidationBadge({ state, message }) {
     'MISSING': { color: 'text-destructive', bg: 'bg-destructive/10', border: 'border-destructive/20', icon: XCircle, label: 'Missing' },
     'IMPLAUSIBLE_VALUE': { color: 'text-destructive', bg: 'bg-destructive/10', border: 'border-destructive/20', icon: XCircle, label: 'Implausible Value' },
     'UNRECOGNIZED_UNIT': { color: 'text-warning-foreground', bg: 'bg-warning/10', border: 'border-warning/20', icon: AlertTriangle, label: 'Unrecognized Unit' },
+    'NO_REFERENCE_RANGE': { color: 'text-warning-foreground', bg: 'bg-warning/10', border: 'border-warning/20', icon: AlertTriangle, label: 'No Reference Range' },
     'INCONSISTENT_DATES': { color: 'text-warning-foreground', bg: 'bg-warning/10', border: 'border-warning/20', icon: AlertTriangle, label: 'Inconsistent Dates' },
     'CORRECTED': { color: 'text-primary', bg: 'bg-primary/10', border: 'border-primary/20', icon: ShieldCheck, label: 'Corrected' }
   };

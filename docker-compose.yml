@@ -13,6 +13,11 @@ x-backend-env: &backend-env
   GEMINI_API_KEY: ${GEMINI_API_KEY:-}
   GEMINI_MODEL: ${GEMINI_MODEL:-}
   SQL_ECHO: "false"
+  # Optional in development (files are stored unencrypted without it); required in production
+  DOCUMENT_ENCRYPTION_KEY: ${DOCUMENT_ENCRYPTION_KEY:-}
+  DOCUMENT_RETENTION_DAYS: ${DOCUMENT_RETENTION_DAYS:-0}
+  ALLOW_EXTERNAL_AI_PHI: ${ALLOW_EXTERNAL_AI_PHI:-false}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
 
 services:
   db:
@@ -90,6 +95,19 @@ services:
     volumes:
       - documents_data:/app/data/documents
       - artifacts_data:/app/data/artifacts
+
+  beat:
+    # Periodic jobs (document retention purge; a no-op while DOCUMENT_RETENTION_DAYS=0)
+    build:
+      context: ./backend
+    command: ["celery", "-A", "src.worker.celery_app", "beat", "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - clin_network
 
   frontend:
     # Development server (hot reload). For production, build static assets with

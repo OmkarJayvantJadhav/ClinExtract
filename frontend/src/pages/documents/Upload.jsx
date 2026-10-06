@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import { UploadCloud, File, X, CheckCircle2, Loader2, FileType2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { UploadCloud, X, CheckCircle2, Loader2, FileType2 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';

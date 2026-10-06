@@ -1,0 +1,161 @@
+# Production stack:
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# Only the web server (Caddy) is exposed, on 80/443. It serves the built frontend, proxies
+# /api to the backend and obtains TLS certificates automatically for SITE_ADDRESS.
+# Required variables (the stack refuses to start without them): see .env.production.example
+
+x-backend-env: &backend-env
+  APP_ENV: production
+  DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/clinextract
+  CELERY_BROKER_URL: amqp://${RABBITMQ_USER:?set RABBITMQ_USER}:${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD}@rabbitmq:5672//
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+  DOCUMENT_ENCRYPTION_KEY: ${DOCUMENT_ENCRYPTION_KEY:?set DOCUMENT_ENCRYPTION_KEY}
+  DOCUMENT_RETENTION_DAYS: ${DOCUMENT_RETENTION_DAYS:-0}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
+  CORS_ORIGINS: '["https://${SITE_ADDRESS:?set SITE_ADDRESS}"]'
+  TRUST_PROXY_HEADERS: "true"
+  EXTRACTION_PROVIDER: ${EXTRACTION_PROVIDER:-rule_based}
+  EXTRACTION_FALLBACK_ENABLED: ${EXTRACTION_FALLBACK_ENABLED:-false}
+  ALLOW_EXTERNAL_AI_PHI: ${ALLOW_EXTERNAL_AI_PHI:-false}
+  LLM_PROVIDER: ${LLM_PROVIDER:-}
+  LLM_MODEL: ${LLM_MODEL:-}
+  VLM_PROVIDER: ${VLM_PROVIDER:-}
+  VLM_MODEL: ${VLM_MODEL:-}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-}
+  DEBUG: "false"
+  SQL_ECHO: "false"
+
+x-backend-volumes: &backend-volumes
+  - documents_data:/app/data/documents
+  - artifacts_data:/app/data/artifacts
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: clinextract
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    command: ["sh", "-c", "alembic upgrade head && uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 2 --no-server-header"]
+    environment: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health/ready', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  worker:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    command: ["celery", "-A", "src.worker.celery_app", "worker", "--loglevel=info", "--concurrency=2"]
+    environment: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      backend: { condition: service_healthy }
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A src.worker.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 | grep -q pong"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+
+  beat:
+    # Scheduler for periodic jobs (document retention purge)
+    build:
+      context: ./backend
+    restart: unless-stopped
+    command: ["celery", "-A", "src.worker.celery_app", "beat", "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
+    environment: *backend-env
+    depends_on:
+      backend: { condition: service_healthy }
+    networks: [internal]
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend: { condition: service_healthy }
+    networks: [internal]
+
+  backup:
+    # Daily database dump + document/artifact archive, kept for BACKUP_RETENTION_DAYS.
+    # Copy the backups volume off the host (see README "Backups").
+    image: postgres:15-alpine
+    restart: unless-stopped
+    entrypoint: ["sh", "/scripts/backup.sh"]
+    environment:
+      PGHOST: db
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PGDATABASE: clinextract
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - ./scripts/backup.sh:/scripts/backup.sh:ro
+      - backups:/backups
+      - documents_data:/data/documents:ro
+      - artifacts_data:/data/artifacts:ro
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [internal]
+
+networks:
+  internal:
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
+  documents_data:
+  artifacts_data:
+  caddy_data:
+  caddy_config:
+  backups:

@@ -9,6 +9,7 @@ CLINICAL_FIELD_SPECS = {
     "patient_name": "Full patient name as printed",
     "date_of_birth": "Patient date of birth, as printed (e.g. 1980-01-15 or 01/15/1980)",
     "patient_id": "Patient / medical record identifier",
+    "patient_sex": "Patient sex as printed (M/F/Male/Female), or null if not printed",
     "specimen_type": "Specimen type, e.g. Blood, Serum, Plasma, Urine",
     "collection_date": "Specimen collection date, as printed",
     "received_date": "Date the specimen was received by the lab, as printed",

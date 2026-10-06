@@ -1,14 +1,40 @@
+from typing import Optional, Tuple
 
-# Adult reference ranges, expressed in each analyte's canonical unit.
-# NOTE: these are not sex- or age-specific (no sex/age field is extracted yet), so
-# OUTSIDE_REFERENCE_RANGE is a prompt for human review, never a reason to block approval.
+# Adult reference ranges in each analyte's canonical unit, by sex ("M"/"F"), with an "any"
+# fallback (the union of the sex-specific ranges) when sex is unknown.
+# Pediatric ranges vary strongly with age, so for patients under ADULT_AGE no range is
+# applied and the value is routed to human review instead.
+ADULT_AGE = 18
+
 REFERENCE_RANGES = {
-    "glucose": {"min": 70.0, "max": 100.0, "unit": "mg/dL"},
-    "hemoglobin": {"min": 12.0, "max": 17.5, "unit": "g/dL"},
-    "hematocrit": {"min": 36.0, "max": 50.0, "unit": "%"},
-    "white_blood_cell_count": {"min": 4.5, "max": 11.0, "unit": "x10^3/uL"},
-    "platelet_count": {"min": 150.0, "max": 450.0, "unit": "x10^3/uL"}
+    "glucose": {"unit": "mg/dL", "ranges": {"any": (70.0, 100.0)}},
+    "hemoglobin": {"unit": "g/dL", "ranges": {"M": (13.5, 17.5), "F": (12.0, 15.5), "any": (12.0, 17.5)}},
+    "hematocrit": {"unit": "%", "ranges": {"M": (41.0, 50.0), "F": (36.0, 44.0), "any": (36.0, 50.0)}},
+    "white_blood_cell_count": {"unit": "x10^3/uL", "ranges": {"any": (4.5, 11.0)}},
+    "platelet_count": {"unit": "x10^3/uL", "ranges": {"any": (150.0, 450.0)}},
 }
+
+def canonical_unit(field_name: str) -> Optional[str]:
+    ref = REFERENCE_RANGES.get(field_name)
+    return ref["unit"] if ref else None
+
+def get_reference_range(field_name: str, sex: Optional[str] = None, age: Optional[int] = None) -> Optional[Tuple[float, float, str]]:
+    """
+    Returns (lower, upper, basis) for the patient, or None when no applicable range exists
+    (unknown analyte, or a pediatric patient).
+    """
+    ref = REFERENCE_RANGES.get(field_name)
+    if not ref:
+        return None
+    if age is not None and age < ADULT_AGE:
+        return None
+    ranges = ref["ranges"]
+    if sex in ("M", "F") and sex in ranges:
+        lower, upper = ranges[sex]
+        return lower, upper, f"adult {'male' if sex == 'M' else 'female'}"
+    lower, upper = ranges["any"]
+    basis = "adult" if len(ranges) == 1 else "adult (sex unknown)"
+    return lower, upper, basis
 
 _COUNT_UNITS = {
     "x10^3/ul": 1.0, "10^3/ul": 1.0, "k/ul": 1.0, "thou/ul": 1.0,

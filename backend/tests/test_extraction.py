@@ -25,7 +25,7 @@ def test_rule_based_extractor():
     }
     
     result = extractor.extract(mock_data)
-    assert result.model_version == "rule-based-v1.1"
+    assert result.model_version == "rule-based-v1.2"
     
     fields = result.fields
     assert len(fields) == 3
@@ -46,33 +46,33 @@ def test_rule_based_extractor():
     glucose_field = next(f for f in fields if f.field_name == "glucose")
     assert glucose_field.value == "108"
 
-def test_factory_selection():
+def test_factory_selection(monkeypatch):
     from src.extraction.factory import ExtractionFactory
     from src.extraction.rule_based import RuleBasedExtractor
     from src.extraction.llm import LLMExtractor
     from src.extraction.vlm import VLMExtractor
     from src.core.config import settings
 
-    settings.EXTRACTION_PROVIDER = "rule_based"
+    monkeypatch.setattr(settings, "EXTRACTION_PROVIDER", "rule_based")
     ext = ExtractionFactory.get_extractor("rule_based")
     assert isinstance(ext, RuleBasedExtractor)
 
-    settings.EXTRACTION_PROVIDER = "llm"
+    monkeypatch.setattr(settings, "EXTRACTION_PROVIDER", "llm")
     ext = ExtractionFactory.get_extractor("llm")
     assert isinstance(ext, LLMExtractor)
 
-    settings.EXTRACTION_PROVIDER = "vlm"
+    monkeypatch.setattr(settings, "EXTRACTION_PROVIDER", "vlm")
     ext = ExtractionFactory.get_extractor("vlm")
     assert isinstance(ext, VLMExtractor)
     
     with pytest.raises(ValueError):
         ExtractionFactory.get_extractor("invalid_provider")
 
-def test_llm_extractor_with_mock():
+def test_llm_extractor_with_mock(monkeypatch):
     from src.extraction.factory import ExtractionFactory
     from src.core.config import settings
-    settings.EXTRACTION_PROVIDER = "llm"
-    settings.LLM_PROVIDER = "mock"
+    monkeypatch.setattr(settings, "EXTRACTION_PROVIDER", "llm")
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "mock")
     
     ext = ExtractionFactory.get_extractor("llm")
     
