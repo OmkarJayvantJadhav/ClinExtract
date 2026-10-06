@@ -12,11 +12,11 @@ import { useAuth } from '@/context/AuthContext';
 
 export function Dashboard() {
   const { user } = useAuth();
-  
+
   const { data: analytics, isLoading: analyticsLoading } = useQuery({
     queryKey: ['analytics'],
     queryFn: getAnalytics,
-    enabled: user?.role === 'ADMIN' || user?.role === 'SUPERVISOR',
+    enabled: user?.role === 'ADMIN',
     refetchInterval: 30000
   });
 
@@ -39,9 +39,9 @@ export function Dashboard() {
       </div>
     );
   }
-  
+
   const recentDocs = documentsData?.items || [];
-  
+
   // Default values if user has no access to analytics (e.g. CLINICIAN)
   const defaultAnalytics = {
     documents: { total: 0, processed_today: 0 },
@@ -50,7 +50,7 @@ export function Dashboard() {
     processing: { retrying: 0, failed: 0, succeeded: 0 },
     extraction: { fallback_count: 0 }
   };
-  
+
   const stats = analytics || defaultAnalytics;
 
   return (
@@ -60,8 +60,15 @@ export function Dashboard() {
         <p className="text-muted-foreground">Clinical document processing overview</p>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
+      {/* KPI Cards (operational metrics are admin-only) */}
+      {!analytics && (
+        <Card>
+          <CardContent className="p-4 text-sm text-muted-foreground">
+            Operational metrics are available to administrators.
+          </CardContent>
+        </Card>
+      )}
+      {analytics && <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Total Processed</CardTitle>
@@ -69,7 +76,7 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.documents.total}</div>
-            <p className="text-xs text-muted-foreground">+{stats.documents.processed_today} today</p>
+            <p className="text-xs text-muted-foreground">+{stats.documents.uploaded_today ?? stats.documents.processed_today} uploaded today</p>
           </CardContent>
         </Card>
         <Card>
@@ -122,7 +129,7 @@ export function Dashboard() {
             <p className="text-xs text-muted-foreground">Processing errors</p>
           </CardContent>
         </Card>
-      </div>
+      </div>}
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
         <Card className="col-span-4">
@@ -167,9 +174,9 @@ export function Dashboard() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Document ID</TableHead>
+                <TableHead>Document</TableHead>
                 <TableHead>Patient ID</TableHead>
-                <TableHead>Type</TableHead>
+                <TableHead>Confidence</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Time</TableHead>
               </TableRow>
@@ -178,13 +185,13 @@ export function Dashboard() {
               {recentDocs.length > 0 ? recentDocs.map((doc) => (
                 <TableRow key={doc.id}>
                   <TableCell className="font-medium">
-                    <Link to={`/documents/${doc.id}`} className="text-primary hover:underline">{doc.id}</Link>
+                    <Link to={`/documents/${doc.id}`} className="text-primary hover:underline">{doc.filename}</Link>
                   </TableCell>
-                  <TableCell className="font-mono text-sm">{doc.patientId || '-'}</TableCell>
-                  <TableCell>{doc.docType || '-'}</TableCell>
+                  <TableCell className="font-mono text-sm">{doc.patient_id || '-'}</TableCell>
+                  <TableCell>{doc.overall_confidence !== null && doc.overall_confidence !== undefined ? `${doc.overall_confidence}%` : '-'}</TableCell>
                   <TableCell><DocumentStatusBadge status={doc.status} /></TableCell>
                   <TableCell className="text-muted-foreground text-sm">
-                    {new Date(doc.uploadedAt).toLocaleString()}
+                    {new Date(doc.created_at).toLocaleString()}
                   </TableCell>
                 </TableRow>
               )) : (

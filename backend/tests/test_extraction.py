@@ -25,7 +25,7 @@ def test_rule_based_extractor():
     }
     
     result = extractor.extract(mock_data)
-    assert result.model_version == "rule-based-v1.0"
+    assert result.model_version == "rule-based-v1.1"
     
     fields = result.fields
     assert len(fields) == 3
@@ -81,7 +81,7 @@ def test_llm_extractor_with_mock():
     
     assert result.extractor_type == "llm"
     assert result.provider == "mock"
-    assert result.prompt_version == "v1.0"
+    assert result.prompt_version == "v1.1"
     assert len(result.fields) == 3
     
     patient_name = next(f for f in result.fields if f.field_name == "patient_name")

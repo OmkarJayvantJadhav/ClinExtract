@@ -74,6 +74,10 @@ export function ValidationBadge({ state, message }) {
     'SOURCE_MISMATCH': { color: 'text-destructive', bg: 'bg-destructive/10', border: 'border-destructive/20', icon: AlertCircle, label: 'Source Mismatch' },
     'OUTSIDE_REFERENCE_RANGE': { color: 'text-warning-foreground', bg: 'bg-warning/10', border: 'border-warning/20', icon: AlertTriangle, label: 'Outside Reference Range' },
     'INVALID_FORMAT': { color: 'text-destructive', bg: 'bg-destructive/10', border: 'border-destructive/20', icon: XCircle, label: 'Invalid Format' },
+    'MISSING': { color: 'text-destructive', bg: 'bg-destructive/10', border: 'border-destructive/20', icon: XCircle, label: 'Missing' },
+    'IMPLAUSIBLE_VALUE': { color: 'text-destructive', bg: 'bg-destructive/10', border: 'border-destructive/20', icon: XCircle, label: 'Implausible Value' },
+    'UNRECOGNIZED_UNIT': { color: 'text-warning-foreground', bg: 'bg-warning/10', border: 'border-warning/20', icon: AlertTriangle, label: 'Unrecognized Unit' },
+    'INCONSISTENT_DATES': { color: 'text-warning-foreground', bg: 'bg-warning/10', border: 'border-warning/20', icon: AlertTriangle, label: 'Inconsistent Dates' },
     'CORRECTED': { color: 'text-primary', bg: 'bg-primary/10', border: 'border-primary/20', icon: ShieldCheck, label: 'Corrected' }
   };
 

@@ -5,8 +5,8 @@ import filetype
 
 def prepare_page_images(file_bytes: bytes, mime_type: str = None) -> List[Dict[str, Any]]:
     """
-    Takes raw document bytes and returns a list of base64 encoded JPEGs per page.
-    Yields {"page_num": int, "base64": str, "mime_type": "image/jpeg"}
+    Takes raw document bytes and returns one image per page (raw bytes plus base64).
+    Returns [{"page_num": int, "bytes": bytes, "base64": str, "mime_type": str}]
     """
     if mime_type is None:
         kind = filetype.guess(file_bytes)
@@ -35,6 +35,7 @@ def prepare_page_images(file_bytes: bytes, mime_type: str = None) -> List[Dict[s
             
             pages.append({
                 "page_num": page_num + 1,
+                "bytes": img_bytes,
                 "base64": b64,
                 "mime_type": "image/jpeg"
             })
@@ -43,6 +44,7 @@ def prepare_page_images(file_bytes: bytes, mime_type: str = None) -> List[Dict[s
         b64 = base64.b64encode(file_bytes).decode("utf-8")
         pages.append({
             "page_num": 1,
+            "bytes": file_bytes,
             "base64": b64,
             "mime_type": mime_type
         })
@@ -58,6 +60,7 @@ def prepare_page_images(file_bytes: bytes, mime_type: str = None) -> List[Dict[s
                 b64 = base64.b64encode(img_bytes).decode("utf-8")
                 pages.append({
                     "page_num": page_num + 1,
+                    "bytes": img_bytes,
                     "base64": b64,
                     "mime_type": "image/jpeg"
                 })

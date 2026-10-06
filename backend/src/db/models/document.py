@@ -25,5 +25,6 @@ class Document(BaseModel):
 
     uploader = relationship("User", back_populates="documents")
     processing_jobs = relationship("ProcessingJob", back_populates="document", cascade="all, delete-orphan")
-    extractions = relationship("Extraction", back_populates="document", cascade="all, delete-orphan")
+    # Newest first, so extractions[0] is always the current extraction.
+    extractions = relationship("Extraction", back_populates="document", cascade="all, delete-orphan", order_by="Extraction.created_at.desc()")
     reviews = relationship("Review", back_populates="document", cascade="all, delete-orphan")

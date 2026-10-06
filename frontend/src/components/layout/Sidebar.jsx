@@ -4,7 +4,7 @@ import {
   LayoutDashboard, 
   Files, 
   ClipboardCheck, 
-  Archive, 
+  Upload,
   BarChart3, 
   Activity, 
   ShieldAlert, 
@@ -14,12 +14,14 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { useAuth } from '@/context/AuthContext';
+import { ROUTE_ROLES } from '@/routes/roles';
 
 const navItems = [
   { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
   { name: 'Documents', path: '/documents', icon: Files },
+  { name: 'Upload', path: '/documents/upload', icon: Upload },
   { name: 'Review Queue', path: '/review', icon: ClipboardCheck },
-  { name: 'Records', path: '/records', icon: Archive },
   { name: 'Analytics', path: '/analytics', icon: BarChart3 },
   { name: 'Audit Logs', path: '/audit', icon: ShieldAlert },
   { name: 'System Health', path: '/system-health', icon: Activity },
@@ -28,6 +30,9 @@ const navItems = [
 ];
 
 export function Sidebar({ collapsed }) {
+  const { hasRole } = useAuth();
+  const visibleItems = navItems.filter(item => !ROUTE_ROLES[item.path] || hasRole(ROUTE_ROLES[item.path]));
+
   return (
     <aside className={cn(
       "fixed inset-y-0 left-0 z-40 flex flex-col border-r bg-sidebar text-sidebar-foreground transition-all duration-300 md:static",
@@ -43,11 +48,12 @@ export function Sidebar({ collapsed }) {
       <div className="flex-1 overflow-auto py-4">
         <nav className="grid items-start px-2 text-sm font-medium">
           <TooltipProvider delayDuration={0}>
-            {navItems.map((item) => (
+            {visibleItems.map((item) => (
               <Tooltip key={item.path} disableHoverableContent>
                 <TooltipTrigger asChild>
                   <NavLink
                     to={item.path}
+                    end={item.path === '/documents'}
                     className={({ isActive }) => cn(
                       "flex items-center gap-3 rounded-md px-3 py-2 transition-colors",
                       isActive 
