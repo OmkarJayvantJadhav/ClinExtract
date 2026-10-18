@@ -64,6 +64,22 @@ def _check_image_size(image_bytes: bytes) -> None:
     if width * height > MAX_IMAGE_PIXELS:
         raise ValueError(f"Image too large to process ({width}x{height} pixels)")
 
+def _reading_order(positioned):
+    """
+    Sorts OCR words into visual rows, top to bottom and left to right within a row.
+    Tesseract emits widely spaced table columns as separate blocks (every test name, then every
+    result), which separates each label from its value; row order keeps them together.
+    `positioned` holds (center_y, height, left, word) tuples in deskewed-image pixels.
+    """
+    rows = []  # [center_y, height, items]
+    for item in sorted(positioned, key=lambda p: p[0]):
+        center_y, height = item[0], item[1]
+        if rows and abs(center_y - rows[-1][0]) <= max(rows[-1][1], height) * 0.5:
+            rows[-1][2].append(item)
+        else:
+            rows.append([center_y, height, [item]])
+    return [item for _, _, items in rows for item in sorted(items, key=lambda p: p[2])]
+
 def process_scanned_page(image_bytes: bytes, page_number: int) -> dict:
     """
     Extracts text and normalized bounding boxes from a scanned image using OpenCV and Tesseract.
@@ -93,7 +109,8 @@ def process_scanned_page(image_bytes: bytes, page_number: int) -> dict:
     ocr_data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
 
     words_data = []
-    full_text_parts = []
+    # (row key in the deskewed frame, x, word) so words can be put in reading order below
+    positioned = []
 
     n_boxes = len(ocr_data['text'])
     for i in range(n_boxes):
@@ -112,14 +129,16 @@ def process_scanned_page(image_bytes: bytes, page_number: int) -> dict:
             norm_w = max(0.0, min(1.0 - norm_x0, w / width if width else 0.0))
             norm_h = max(0.0, min(1.0 - norm_y0, h / height if height else 0.0))
 
-            words_data.append({
+            word = {
                 "text": text,
                 "confidence": conf,
                 "bbox": [norm_x0, norm_y0, norm_w, norm_h]
-            })
-            full_text_parts.append(text)
+            }
+            top, line_h = ocr_data['top'][i], ocr_data['height'][i]
+            positioned.append((top + line_h / 2.0, line_h, ocr_data['left'][i], word))
 
-    full_text = " ".join(full_text_parts)
+    words_data = [word for _, _, _, word in _reading_order(positioned)]
+    full_text = " ".join(w["text"] for w in words_data)
 
     return {
         "page_number": page_number,

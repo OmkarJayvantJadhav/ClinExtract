@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { fetchApi } from '@/services/apiClient';
+import { useDemoInfo, isDemoUser } from '@/lib/demo';
 
 function ReadOnlyRow({ label, value, help }) {
   return (
@@ -175,6 +176,9 @@ export function Settings() {
   const { user, hasRole, logout } = useAuth();
   const navigate = useNavigate();
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: () => fetchApi('/settings') });
+  const { data: demo } = useDemoInfo();
+  // Shared demo accounts cannot change their password or sign out other visitors
+  const sharedAccount = isDemoUser(demo, user);
 
   const logoutAll = useMutation({
     mutationFn: () => fetchApi('/auth/logout-all', { method: 'POST' }),
@@ -209,17 +213,25 @@ export function Settings() {
               <ReadOnlyRow label="Password last changed" value={user?.password_changed_at ? new Date(user.password_changed_at).toLocaleDateString() : '—'} />
             </CardContent>
           </Card>
-          <ChangePasswordCard minLength={settings?.password_min_length} />
-          <Card>
-            <CardHeader>
-              <CardTitle>Sessions</CardTitle>
-              <CardDescription>Sign out of ClinExtract on every device, including this one.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button variant="outline" onClick={() => logoutAll.mutate()} disabled={logoutAll.isPending}>Sign out everywhere</Button>
-              {logoutAll.isError && <p className="mt-2 text-sm text-destructive">{logoutAll.error.message}</p>}
-            </CardContent>
-          </Card>
+          {sharedAccount ? (
+            <p className="text-sm text-muted-foreground">
+              This is a shared demo account, so its password and sessions cannot be changed.
+            </p>
+          ) : (
+            <>
+              <ChangePasswordCard minLength={settings?.password_min_length} />
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sessions</CardTitle>
+                  <CardDescription>Sign out of ClinExtract on every device, including this one.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button variant="outline" onClick={() => logoutAll.mutate()} disabled={logoutAll.isPending}>Sign out everywhere</Button>
+                  {logoutAll.isError && <p className="mt-2 text-sm text-destructive">{logoutAll.error.message}</p>}
+                </CardContent>
+              </Card>
+            </>
+          )}
         </TabsContent>
 
         <TabsContent value="confidence" className="mt-6 grid gap-6">

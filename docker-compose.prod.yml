@@ -24,6 +24,8 @@ x-backend-env: &backend-env
   VLM_MODEL: ${VLM_MODEL:-}
   GEMINI_API_KEY: ${GEMINI_API_KEY:-}
   GEMINI_MODEL: ${GEMINI_MODEL:-}
+  DEMO_ACCOUNTS: ${DEMO_ACCOUNTS:-}
+  DEMO_PASSWORD: ${DEMO_PASSWORD:-}
   DEBUG: "false"
   SQL_ECHO: "false"
 

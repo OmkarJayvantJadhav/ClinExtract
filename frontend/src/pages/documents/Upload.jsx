@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { UploadCloud, X, CheckCircle2, Loader2, FileType2 } from 'lucide-react';
+import { UploadCloud, X, CheckCircle2, Loader2, FileType2, Download } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Link } from 'react-router-dom';
+import { useDemoInfo, SAMPLE_REPORTS } from '@/lib/demo';
 
 export function Upload() {
   const [file, setFile] = useState(null);
@@ -16,6 +17,7 @@ export function Upload() {
   // Upload states
   const [uploadStatus, setUploadStatus] = useState('IDLE'); // IDLE, UPLOADING, SUCCESS, ERROR
   const [progress, setProgress] = useState(0);
+  const { data: demo } = useDemoInfo();
 
   const handleDragOver = (e) => {
     e.preventDefault();
@@ -201,6 +203,27 @@ export function Upload() {
           </CardFooter>
         )}
       </Card>
+
+      {demo?.enabled && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Sample reports</CardTitle>
+            <CardDescription>Synthetic lab reports. Download one, then upload it above to see how it is handled.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-2">
+            {SAMPLE_REPORTS.map(sample => (
+              <a key={sample.file} href={`/samples/${sample.file}`} download
+                className="flex items-center gap-3 rounded-md border p-3 text-sm hover:bg-muted/50">
+                <Download className="h-4 w-4 shrink-0 text-primary" />
+                <span>
+                  <span className="block font-medium font-mono text-xs">{sample.file}</span>
+                  <span className="block text-muted-foreground">{sample.description}</span>
+                </span>
+              </a>
+            ))}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

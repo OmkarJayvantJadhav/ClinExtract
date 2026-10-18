@@ -231,3 +231,32 @@ def test_reprocess_failed_document(admin, new_user, monkeypatch):
 
     actions = [i["action"] for i in admin.get("/api/v1/audit", params={"document_id": doc_id}).json()["items"]]
     assert "DOCUMENT_REPROCESS_REQUESTED" in actions
+
+
+# --- public demo accounts -------------------------------------------------------
+
+def test_demo_accounts(admin, monkeypatch):
+    from src.core.config import settings
+    username = f"demo_{uuid.uuid4().hex[:8]}"
+    assert admin.post("/api/v1/users", json={"username": username, "role": "REVIEWER", "password": STRONG}).status_code == 201
+
+    anon = TestClient(app)
+    assert anon.get("/api/v1/auth/demo").json() == {"enabled": False, "accounts": []}
+
+    # The admin account is never offered or treated as a demo account
+    monkeypatch.setattr(settings, "DEMO_ACCOUNTS", f"{username}, admin")
+    monkeypatch.setattr(settings, "DEMO_PASSWORD", STRONG)
+    info = anon.get("/api/v1/auth/demo").json()
+    assert info == {"enabled": True, "accounts": [{"username": username, "role": "REVIEWER"}], "password": STRONG}
+
+    # Failed logins never lock a shared account
+    for _ in range(8):
+        assert anon.post("/api/v1/auth/login", json={"username": username, "password": "wrong"}).status_code == 401
+    demo, r = login(username, STRONG)
+    assert r.status_code == 200
+
+    # A visitor cannot take the account away from everyone else
+    r = demo.post("/api/v1/auth/change-password", json={"current_password": STRONG, "new_password": "An0ther-Passw0rd!"})
+    assert r.status_code == 403
+    assert demo.post("/api/v1/auth/logout-all").status_code == 403
+    assert demo.get("/api/v1/auth/me").status_code == 200

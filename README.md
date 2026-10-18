@@ -186,6 +186,12 @@ cp .env.production.example .env.production   # fill in every value
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 docker compose -f docker-compose.prod.yml --env-file .env.production exec backend python scripts/seed_users.py
 ```
+**Free public demo:** [docs/DEPLOY_FREE_ORACLE.md](docs/DEPLOY_FREE_ORACLE.md) runs this stack on
+an Oracle Cloud Always Free VM with one command (`sudo bash scripts/oracle-setup.sh`), including a
+free HTTPS hostname, shared demo accounts with one-click sign-in (`DEMO_ACCOUNTS`,
+`DEMO_PASSWORD`) and downloadable synthetic sample reports
+(`backend/scripts/make_sample_reports.py`).
+
 Point a DNS record for `SITE_ADDRESS` at the host and open ports 80/443; Caddy obtains and
 renews the TLS certificate. The API refuses to start in production without a strong
 `JWT_SECRET` and a `DOCUMENT_ENCRYPTION_KEY`. Seeding refuses the default dev passwords there,

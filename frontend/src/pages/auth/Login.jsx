@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { HeartPulse, Eye, EyeOff, ShieldCheck } from 'lucide-react';
+import { HeartPulse, Eye, EyeOff, ShieldCheck, LogIn } from 'lucide-react';
+import { useDemoInfo, DEMO_ROLE_DESCRIPTIONS } from '@/lib/demo';
 
 export function Login() {
   const [username, setUsername] = useState('');
@@ -14,16 +15,21 @@ export function Login() {
   const [error, setError] = useState('');
   const { login, isLoading } = useAuth();
   const navigate = useNavigate();
+  const { data: demo } = useDemoInfo();
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
+  const signIn = async (credentials) => {
     setError('');
     try {
-      await login({ username, password });
+      await login(credentials);
       navigate('/dashboard');
     } catch (err) {
       setError(err?.message === 'Failed to fetch' ? 'Cannot reach the server. Please try again.' : (err?.message || 'Invalid username or password.'));
     }
+  };
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    signIn({ username, password });
   };
 
   return (
@@ -53,6 +59,32 @@ export function Login() {
             <HeartPulse className="h-10 w-10 text-primary" />
             <span className="text-2xl font-bold">ClinExtract</span>
           </div>
+
+          {demo?.enabled && (
+            <Card className="border-primary/30 bg-primary/5">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">Try the live demo</CardTitle>
+                <CardDescription>
+                  Shared accounts with synthetic data only. Sign in as an operator to upload a sample report,
+                  then as a reviewer to check it.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-2">
+                {demo.accounts.map(account => (
+                  <Button key={account.username} variant="outline" className="h-auto justify-start py-2 text-left bg-background"
+                    disabled={isLoading} onClick={() => signIn({ username: account.username, password: demo.password })}>
+                    <LogIn className="h-4 w-4 mr-3 shrink-0" />
+                    <span>
+                      <span className="block font-medium">Sign in as {account.username}</span>
+                      <span className="block text-xs text-muted-foreground font-normal">
+                        {DEMO_ROLE_DESCRIPTIONS[account.role] ?? account.role}
+                      </span>
+                    </span>
+                  </Button>
+                ))}
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader>

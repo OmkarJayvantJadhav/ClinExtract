@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     # development and disabled in production.
     METRICS_TOKEN: str | None = None
 
+    # --- Public demo ---
+    # Comma-separated non-admin usernames to share publicly on a demo deployment, e.g.
+    # "operator,reviewer". With DEMO_PASSWORD set they are offered on the sign-in page, cannot
+    # change their password or sign out other sessions, and are not locked by failed logins
+    # (per-IP login rate limiting still applies). Use synthetic documents only.
+    DEMO_ACCOUNTS: str = ""
+    DEMO_PASSWORD: str | None = None
+
     # Extraction configuration
     EXTRACTION_PROVIDER: str = "rule_based"
     EXTRACTION_FALLBACK_ENABLED: bool = False
@@ -87,6 +95,12 @@ class Settings(BaseSettings):
             if not self.DOCUMENT_ENCRYPTION_KEY:
                 raise ValueError("DOCUMENT_ENCRYPTION_KEY must be set when APP_ENV=production")
         return self
+
+    @property
+    def demo_usernames(self) -> set[str]:
+        if not self.DEMO_PASSWORD:
+            return set()
+        return {name.strip() for name in self.DEMO_ACCOUNTS.split(",") if name.strip()}
 
     @property
     def cookie_secure(self) -> bool:

@@ -91,8 +91,8 @@ export function ValidationBadge({ state, message }) {
   const Icon = current.icon;
 
   return (
-    <div className="flex items-start gap-1 mt-1">
-      <span className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border uppercase tracking-wide", current.bg, current.color, current.border)}>
+    <div className="flex flex-wrap items-start gap-1 mt-1">
+      <span className={cn("inline-flex shrink-0 items-center gap-1 whitespace-nowrap px-1.5 py-0.5 rounded text-[10px] font-medium border uppercase tracking-wide", current.bg, current.color, current.border)}>
         <Icon className="h-3 w-3" />
         {current.label}
       </span>
