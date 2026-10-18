@@ -170,3 +170,64 @@ def test_non_admin_cannot_delete(new_user, admin):
     viewer, _ = login(new_user["username"], STRONG)
     r = viewer.delete(f"/api/v1/documents/{uuid.uuid4()}", params={"reason": "x-x-x"})
     assert r.status_code == 403
+
+
+# --- review policy, queue order, reprocessing ------------------------------------
+
+def test_review_policy_settings(admin, new_user):
+    original = admin.get("/api/v1/settings").json()["review_policy"]
+    assert original == {"review_abnormal_results": False}
+    try:
+        r = admin.put("/api/v1/settings/review-policy", json={"review_abnormal_results": True})
+        assert r.status_code == 200 and r.json()["review_policy"]["review_abnormal_results"] is True
+        assert admin.get("/api/v1/settings").json()["review_policy"]["review_abnormal_results"] is True
+        viewer, _ = login(new_user["username"], STRONG)
+        assert viewer.put("/api/v1/settings/review-policy", json={"review_abnormal_results": False}).status_code == 403
+    finally:
+        admin.put("/api/v1/settings/review-policy", json=original)
+
+def test_list_documents_oldest_first(admin):
+    tag = uuid.uuid4().hex[:8]
+    ids = []
+    for i in range(3):
+        r = admin.post("/api/v1/documents", files={"file": (f"order_{tag}_{i}.pdf", io.BytesIO(_pdf(f"Doc {i}")), "application/pdf")})
+        assert r.status_code == 201
+        ids.append(r.json()["id"])
+
+    def listed(sort):
+        items = admin.get("/api/v1/documents", params={"q": f"order_{tag}", "sort": sort}).json()["items"]
+        return [d["id"] for d in items]
+
+    assert listed("oldest") == ids
+    assert listed("newest") == ids[::-1]
+    assert admin.get("/api/v1/documents", params={"sort": "random"}).status_code == 422
+
+def test_reprocess_failed_document(admin, new_user, monkeypatch):
+    import fitz
+    from src.core.config import settings
+    monkeypatch.setattr(settings, "MAX_DOCUMENT_PAGES", 2)
+    doc = fitz.open()
+    for _ in range(3):
+        doc.new_page().insert_text(fitz.Point(50, 50), "Patient Name: Retry Case Glucose: 90 mg/dL", fontsize=12)
+    r = admin.post("/api/v1/documents", files={"file": ("too_long.pdf", io.BytesIO(doc.write()), "application/pdf")})
+    doc_id = r.json()["id"]
+    assert admin.get(f"/api/v1/documents/{doc_id}").json()["status"] == "FAILED"
+
+    # Only admins/operators may retry
+    viewer, _ = login(new_user["username"], STRONG)
+    assert viewer.post(f"/api/v1/documents/{doc_id}/reprocess").status_code == 403
+
+    # The cause is fixed, so the retry succeeds without a re-upload
+    monkeypatch.setattr(settings, "MAX_DOCUMENT_PAGES", 50)
+    r = admin.post(f"/api/v1/documents/{doc_id}/reprocess")
+    assert r.status_code == 200, r.text
+    detail = admin.get(f"/api/v1/documents/{doc_id}").json()
+    assert detail["status"] in ("REVIEW_REQUIRED", "AUTO_ACCEPTED")
+    assert detail["extractions"]
+
+    # A document that did not fail cannot be reprocessed
+    assert admin.post(f"/api/v1/documents/{doc_id}/reprocess").status_code == 409
+    assert admin.post(f"/api/v1/documents/{uuid.uuid4()}/reprocess").status_code == 404
+
+    actions = [i["action"] for i in admin.get("/api/v1/audit", params={"document_id": doc_id}).json()["items"]]
+    assert "DOCUMENT_REPROCESS_REQUESTED" in actions

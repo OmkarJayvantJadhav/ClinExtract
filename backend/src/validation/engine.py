@@ -31,18 +31,26 @@ VALIDATED_FIELDS = MANDATORY_FIELDS | OPTIONAL_FIELDS
 # confirmed as-is: an abnormal lab value is a clinical finding, not an extraction error.
 BLOCKING_STATES = {"MISSING", "INVALID_FORMAT", "IMPLAUSIBLE_VALUE"}
 
+# Abnormal-but-plausible results are clinical findings, not doubts about the extraction. They
+# stay flagged on the field, but only hold the document for review when the review policy asks
+# for it (review_abnormal_results). EXTREME_VALUE is not in this set: it always goes to review.
+ABNORMAL_STATES = {"OUTSIDE_REFERENCE_RANGE"}
+
 class ValidationEngine:
-    def __init__(self, auto_accept_threshold: float = 0.90, review_recommended: float = 0.90, low_confidence: float = 0.70):
+    def __init__(self, auto_accept_threshold: float = 0.90, review_recommended: float = 0.90, low_confidence: float = 0.70,
+                 review_abnormal_results: bool = False):
         self.auto_accept_threshold = auto_accept_threshold
         self.high_threshold = review_recommended
         self.low_threshold = low_confidence
+        self.auto_acceptable_states = {"VALID"} if review_abnormal_results else {"VALID"} | ABNORMAL_STATES
 
     @classmethod
-    def from_thresholds(cls, thresholds: dict) -> "ValidationEngine":
+    def from_thresholds(cls, thresholds: dict, review_policy: Optional[dict] = None) -> "ValidationEngine":
         return cls(
             auto_accept_threshold=thresholds["auto_accept"],
             review_recommended=thresholds["review_recommended"],
             low_confidence=thresholds["low_confidence"],
+            review_abnormal_results=bool((review_policy or {}).get("review_abnormal_results", False)),
         )
 
     @staticmethod
@@ -98,6 +106,12 @@ class ValidationEngine:
                         messages.append(
                             f"Value {n_val} is outside the {meta.get('range_basis', 'adult')} reference range "
                             f"({meta.get('lower')} - {meta.get('upper')} {meta.get('canonical_unit', '')})".rstrip()
+                        )
+                    elif st == "EXTREME_VALUE":
+                        messages.append(
+                            f"Value {n_val} {meta.get('canonical_unit', '')} is outside any plausible result "
+                            f"({meta.get('plausible_lower')} - {meta.get('plausible_upper')}); "
+                            "check for a misread digit or decimal point"
                         )
                     elif st == "UNRECOGNIZED_UNIT":
                         messages.append(f"Unrecognized unit '{unit}'; expected {meta.get('expected_unit')}")
@@ -207,8 +221,9 @@ class ValidationEngine:
 
             # Decision Engine Rules
             if state != "VALID":
-                is_auto_accepted = False
                 overall_validation_messages.append(f"{field.field_name}: {state}")
+            if state not in self.auto_acceptable_states:
+                is_auto_accepted = False
             if field.confidence_category == "LOW":
                 is_auto_accepted = False
 

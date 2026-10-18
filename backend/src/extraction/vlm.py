@@ -20,8 +20,10 @@ class VLMExtractor(BaseExtractor):
         if not page_images:
             raise NonRetryableExtractionError("VLM failed to extract page images from document bytes")
             
-        all_fields = []
-        
+        # One entry per field: every page is asked for every field, so a multi-page document
+        # would otherwise yield one (mostly empty) copy of each field per page.
+        best_fields = {}
+
         for page_img in page_images:
             page_num = page_img["page_num"]
             img_bytes = page_img["bytes"]
@@ -40,8 +42,11 @@ class VLMExtractor(BaseExtractor):
                 # Enforce provenance and page_num deterministic assignment
                 for field in page_result.fields:
                     field.page_num = page_num
-                    all_fields.append(field)
-                    
+                    current = best_fields.get(field.field_name)
+                    if current is None or self._is_better(field, current):
+                        best_fields[field.field_name] = field
+
+
             except ValidationError as e:
                 raise NonRetryableExtractionError(f"Provider returned invalid structured extraction output.") from e
             except ValueError as e:
@@ -53,10 +58,19 @@ class VLMExtractor(BaseExtractor):
             provider=settings.VLM_PROVIDER or "unknown",
             model_version=settings.VLM_MODEL or "unknown",
             prompt_version=CLINICAL_EXTRACTION_PROMPT_VERSION,
-            fields=all_fields
+            fields=list(best_fields.values())
         )
-        
+
         return final_result
+
+    @staticmethod
+    def _is_better(candidate, current) -> bool:
+        """A value beats no value; between two values the higher confidence wins (earlier page on ties)."""
+        has_candidate = bool(candidate.value and candidate.value.strip())
+        has_current = bool(current.value and current.value.strip())
+        if has_candidate != has_current:
+            return has_candidate
+        return (candidate.confidence or 0.0) > (current.confidence or 0.0)
 
     def _build_prompt(self, document_data: Dict[str, Any], page_num: int) -> str:
         prompt = (

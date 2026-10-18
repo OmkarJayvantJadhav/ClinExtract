@@ -115,3 +115,40 @@ def test_bbox_validation():
         
     with pytest.raises(ValidationError):
         ExtractedFieldData(field_name="test", bbox_normalized=[0.1, 1.2, 0.3, 0.4])
+
+
+class _PagedProvider:
+    """Returns a scripted ExtractionResult per call (one call per page)."""
+    def __init__(self, pages):
+        self.pages = list(pages)
+
+    def generate_structured(self, prompt, schema, image_data=None, image_mime_type="image/jpeg"):
+        return schema(extractor_type="vlm", provider="fake", fields=self.pages.pop(0))
+
+
+def test_vlm_merges_fields_across_pages():
+    import fitz
+    from src.extraction.vlm import VLMExtractor
+
+    doc = fitz.open()
+    doc.new_page()
+    doc.new_page()
+    provider = _PagedProvider([
+        [
+            {"field_name": "patient_name", "value": "Jane Doe", "confidence": 95.0},
+            {"field_name": "glucose", "value": None, "confidence": 0.0},
+            {"field_name": "hemoglobin", "value": "13.9", "confidence": 70.0},
+        ],
+        [
+            {"field_name": "patient_name", "value": None, "confidence": 0.0},
+            {"field_name": "glucose", "value": "92", "confidence": 90.0},
+            {"field_name": "hemoglobin", "value": "13.9", "confidence": 99.0},
+        ],
+    ])
+    result = VLMExtractor(provider).extract({"pages": []}, metadata={"image_bytes": doc.write()})
+
+    by_name = {f.field_name: f for f in result.fields}
+    assert len(result.fields) == 3  # one entry per field, not one per field per page
+    assert (by_name["patient_name"].value, by_name["patient_name"].page_num) == ("Jane Doe", 1)
+    assert (by_name["glucose"].value, by_name["glucose"].page_num) == ("92", 2)
+    assert by_name["hemoglobin"].page_num == 2  # higher confidence wins

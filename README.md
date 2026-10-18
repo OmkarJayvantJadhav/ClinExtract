@@ -258,8 +258,17 @@ also requires organizational measures such as agreements, policies and risk asse
 - The rule-based extractor understands common label variants (MRN, Hgb/Hb, Hct, WBC, PLT,
   "Collected", "Sample", several date formats). Unusual layouts are best handled by the Gemini
   extractors with review.
-- Only missing, malformed or impossible values block approval. Abnormal results must be explicitly
-  confirmed by the reviewer.
+- Results outside the reference range are flagged on the record but do not by themselves send a
+  cleanly extracted document to review. Admins can change this in Settings → Thresholds →
+  Review Policy ("Hold abnormal results for review").
+- Values far outside anything a lab would report (for example hemoglobin 1.45 g/dL, usually a
+  misread decimal point) are flagged `EXTREME_VALUE` and always go to review.
+- On text PDFs, large embedded images (results pasted or scanned under a typed header) are OCR'd
+  as well, so their values are not missed.
+- Only missing, malformed or impossible values block approval. Abnormal and extreme results that
+  reach review must be explicitly confirmed by the reviewer.
+- Documents whose processing failed can be retried from the document page (admins and operators),
+  without re-uploading.
 
 ## AI Provider
 

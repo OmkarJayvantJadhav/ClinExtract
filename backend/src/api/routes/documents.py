@@ -2,7 +2,7 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
-from typing import Any
+from typing import Any, Literal
 
 import filetype
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Request, Query
@@ -94,13 +94,14 @@ async def list_documents(
     q: str | None = Query(None, max_length=200, description="Search filename, patient name or patient ID"),
     created_from: datetime | None = Query(None, description="Uploaded at or after (ISO 8601)"),
     created_to: datetime | None = Query(None, description="Uploaded before (ISO 8601)"),
+    sort: Literal["newest", "oldest"] = Query("newest", description="Order by upload time"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles(ALL_ROLES))
 ) -> Any:
     """
-    Get paginated list of documents, newest first, with optional search and filters.
+    Get paginated list of documents (newest first unless sort=oldest), with optional search and filters.
     """
     query = select(Document)
     if status:
@@ -116,7 +117,7 @@ async def list_documents(
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
 
     query = (
-        query.order_by(Document.created_at.desc())
+        query.order_by(Document.created_at.asc() if sort == "oldest" else Document.created_at.desc(), Document.id)
         .offset((page - 1) * size)
         .limit(size)
         .options(selectinload(Document.extractions).selectinload(Extraction.extracted_fields).selectinload(ExtractedField.field_corrections))
@@ -191,23 +192,62 @@ async def upload_document(
 
     await db.refresh(new_doc)
     await db.refresh(new_job)
+    await _enqueue_processing(db, new_doc, new_job, correlation_id)
+    return new_doc
 
-    # Enqueue the Celery task
+async def _enqueue_processing(db: AsyncSession, doc: Document, job: ProcessingJob, correlation_id) -> None:
+    """Hands a committed QUEUED job to the worker; marks both FAILED (and raises 503) if the broker is unreachable."""
     from src.worker.tasks import process_document_job
     try:
-        process_document_job.delay(str(new_job.id), correlation_id)
+        process_document_job.delay(str(job.id), correlation_id)
     except Exception as e:
-        logger.error(f"Failed to enqueue processing job {new_job.id}: {e}")
-        new_job.status = JobStatus.FAILED
-        new_job.error_details = {"error": "Could not enqueue processing job", "step": "enqueue"}
-        new_doc.status = DocumentStatus.FAILED
+        logger.error(f"Failed to enqueue processing job {job.id}: {e}")
+        job.status = JobStatus.FAILED
+        job.error_details = {"error": "Could not enqueue processing job", "step": "enqueue"}
+        doc.status = DocumentStatus.FAILED
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Document stored but processing could not be queued. Please retry later."
         )
 
-    return new_doc
+@router.post("/{document_id}/reprocess", response_model=DocumentResponse)
+async def reprocess_document(
+    document_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.OPERATOR])),
+) -> Any:
+    """
+    Run processing again for a document whose processing failed (e.g. a worker crash, an
+    extractor outage, or a configuration problem that has since been fixed), without re-uploading it.
+    """
+    correlation_id = getattr(request.state, "correlation_id", None)
+    stmt = select(Document).where(Document.id == document_id).with_for_update()
+    doc = (await db.execute(stmt)).scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.status != DocumentStatus.FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Only documents whose processing failed can be reprocessed (status is {doc.status.value})"
+        )
+
+    job = ProcessingJob(document_id=doc.id, status=JobStatus.QUEUED, correlation_id=correlation_id)
+    db.add(job)
+    doc.status = DocumentStatus.UPLOADED
+    await db.flush()
+    await log_audit_event(
+        db, action="DOCUMENT_REPROCESS_REQUESTED", resource_type=RESOURCE_DOCUMENT, resource_id=str(doc.id),
+        user_id=current_user.id, correlation_id=correlation_id,
+        before_state={"status": DocumentStatus.FAILED.value},
+        after_state={"status": DocumentStatus.UPLOADED.value, "job_id": str(job.id)},
+    )
+    await db.commit()
+    await db.refresh(doc)
+    await db.refresh(job)
+    await _enqueue_processing(db, doc, job, correlation_id)
+    return doc
 
 async def _get_document_or_404(db: AsyncSession, document_id: uuid.UUID) -> Document:
     doc = await db.get(Document, document_id)

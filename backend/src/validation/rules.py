@@ -1,7 +1,9 @@
 import re
 from datetime import datetime, date, timezone
 from typing import Dict, Tuple, Optional
-from src.validation.reference_ranges import UNIT_CONVERSIONS, RAW_COUNT_THRESHOLD, canonical_unit, get_reference_range
+from src.validation.reference_ranges import (
+    UNIT_CONVERSIONS, RAW_COUNT_THRESHOLD, PLAUSIBLE_LIMITS, canonical_unit, get_reference_range,
+)
 
 COUNT_FIELDS = {"white_blood_cell_count", "platelet_count"}
 
@@ -89,6 +91,10 @@ def validate_numeric_and_range(
 
     if expected_unit:
         meta["canonical_unit"] = expected_unit
+        limits = PLAUSIBLE_LIMITS.get(field_name)
+        if limits and not (limits[0] <= num <= limits[1]):
+            meta.update({"value": round(num, 3), "plausible_lower": limits[0], "plausible_upper": limits[1]})
+            return "EXTREME_VALUE", norm_str, meta
         ref = get_reference_range(field_name, sex, age)
         if ref is None:
             meta["reason"] = f"no adult reference range applies (age {age})"

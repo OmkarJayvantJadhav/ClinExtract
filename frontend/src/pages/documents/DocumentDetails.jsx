@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchApi, getDocumentAudit, apiUrl } from '@/services/apiClient';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { DocumentStatusBadge, ConfidenceIndicator } from '@/components/common/StatusPrimitives';
 import { EmptyState } from '@/components/common/FeedbackStates';
-import { ArrowLeft, Edit, Clock, Download, Loader2, User, Trash2 } from 'lucide-react';
+import { ArrowLeft, Edit, Clock, Download, Loader2, User, Trash2, RotateCcw } from 'lucide-react';
 import { DeleteDocumentDialog } from '@/features/documents/DeleteDocumentDialog';
 import { useAuth } from '@/context/AuthContext';
 import { ProcessingStatus } from './ProcessingStatus';
@@ -16,6 +16,12 @@ export function DocumentDetails() {
   const navigate = useNavigate();
   const { hasRole } = useAuth();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const reprocess = useMutation({
+    mutationFn: () => fetchApi(`/documents/${id}/reprocess`, { method: 'POST' }),
+    // The document goes back to UPLOADED, which restarts the status polling below
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['document', id] }),
+  });
 
   // Real API Fetch with Polling
   const { data: doc, isLoading, error } = useQuery({
@@ -85,6 +91,14 @@ export function DocumentDetails() {
               <Trash2 className="h-4 w-4 mr-2" /> Delete
             </Button>
           )}
+          {doc.status === 'FAILED' && hasRole(['ADMIN', 'OPERATOR']) && (
+            <Button size="sm" onClick={() => reprocess.mutate()} disabled={reprocess.isPending}>
+              {reprocess.isPending
+                ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                : <RotateCcw className="h-4 w-4 mr-2" />}
+              Retry processing
+            </Button>
+          )}
           {(doc.status === 'REVIEW_REQUIRED' || doc.status === 'REVIEW_IN_PROGRESS') && (
             <Button size="sm" asChild>
               <Link to={`/review/workspace/${doc.id}`}>
@@ -129,6 +143,7 @@ export function DocumentDetails() {
             </CardContent>
           </Card>
 
+          {reprocess.isError && <p className="text-sm text-destructive">{reprocess.error.message}</p>}
           <ProcessingStatus currentStatus={doc.status} />
         </div>
 

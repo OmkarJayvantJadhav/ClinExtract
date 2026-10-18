@@ -19,10 +19,13 @@ function formatAge(iso) {
   return `${Math.round(hours / 24)} days`;
 }
 
+const QUEUE_PAGE_SIZE = 100;
+
 function useDocumentsByStatus(status) {
   return useQuery({
     queryKey: ['documents', { status }],
-    queryFn: () => fetchApi(`/documents?status=${status}&size=100`),
+    // Oldest first from the server, so the longest-waiting documents are never cut off by the page size
+    queryFn: () => fetchApi(`/documents?status=${status}&sort=oldest&size=${QUEUE_PAGE_SIZE}`),
     refetchInterval: 10000
   });
 }
@@ -42,11 +45,11 @@ export function ReviewQueue() {
     return <ErrorState message={(pending.error || inProgress.error).message} onRetry={() => { pending.refetch(); inProgress.refetch(); }} />;
   }
 
-  // Oldest first: documents waiting longest are reviewed first
-  const byAge = (a, b) => new Date(a.created_at) - new Date(b.created_at);
-  const pendingDocs = [...(pending.data?.items || [])].sort(byAge);
-  const inProgressDocs = [...(inProgress.data?.items || [])].sort(byAge);
-  const docsToDisplay = tab === 'in-progress' ? inProgressDocs : pendingDocs;
+  const pendingDocs = pending.data?.items || [];
+  const inProgressDocs = inProgress.data?.items || [];
+  const current = tab === 'in-progress' ? inProgress.data : pending.data;
+  const docsToDisplay = current?.items || [];
+  const hiddenCount = Math.max(0, (current?.total ?? 0) - docsToDisplay.length);
   const oldest = pendingDocs[0];
 
   return (
@@ -93,8 +96,8 @@ export function ReviewQueue() {
         <Tabs value={tab} onValueChange={setTab} className="flex-1 flex flex-col">
           <div className="p-4 border-b">
             <TabsList>
-              <TabsTrigger value="pending">Awaiting Review ({pendingDocs.length})</TabsTrigger>
-              <TabsTrigger value="in-progress">In Progress ({inProgressDocs.length})</TabsTrigger>
+              <TabsTrigger value="pending">Awaiting Review ({pending.data?.total ?? pendingDocs.length})</TabsTrigger>
+              <TabsTrigger value="in-progress">In Progress ({inProgress.data?.total ?? inProgressDocs.length})</TabsTrigger>
             </TabsList>
           </div>
 
@@ -131,6 +134,11 @@ export function ReviewQueue() {
                   ))}
                 </TableBody>
               </Table>
+            )}
+            {hiddenCount > 0 && (
+              <p className="p-4 text-sm text-muted-foreground border-t">
+                Showing the {docsToDisplay.length} oldest. {hiddenCount} newer document{hiddenCount === 1 ? '' : 's'} will appear as these are reviewed.
+              </p>
             )}
           </TabsContent>
         </Tabs>

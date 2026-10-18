@@ -15,6 +15,10 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    # Documents take seconds to minutes each, so a worker process should only reserve the job
+    # it is running. With the default (4) idle processes can sit waiting while one busy
+    # process holds several queued documents.
+    worker_prefetch_multiplier=1,
     # In a testing environment, we can run tasks eagerly
     task_always_eager=settings.APP_ENV == "testing",
     task_eager_propagates=True,

@@ -139,12 +139,13 @@ async def process_document_async(job_id: str, attempt: int = 1, session_maker: O
     # A failure anywhere here rolls everything back, so a retry starts clean.
     from src.validation.engine import ValidationEngine
 
-    from src.services.system_settings import get_thresholds
+    from src.services.system_settings import get_thresholds, get_review_policy
 
     async with session_maker() as session:
         thresholds = await get_thresholds(session)
+        review_policy = await get_review_policy(session)
         extraction = await _extract_with_fallback(session, doc_id_str, artifact, file_bytes)
-        ValidationEngine.from_thresholds(thresholds).validate_extraction(extraction, artifact)
+        ValidationEngine.from_thresholds(thresholds, review_policy).validate_extraction(extraction, artifact)
         final_decision = extraction.decision
 
         job2 = await session.get(ProcessingJob, job_uuid)

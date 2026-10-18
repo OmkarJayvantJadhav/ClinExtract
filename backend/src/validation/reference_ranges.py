@@ -14,6 +14,17 @@ REFERENCE_RANGES = {
     "platelet_count": {"unit": "x10^3/uL", "ranges": {"any": (150.0, 450.0)}},
 }
 
+# Values outside these bounds (canonical units) are far beyond anything a lab would report and
+# almost always mean a misread digit or decimal point, e.g. hemoglobin "1.42" for "14.2".
+# They are flagged EXTREME_VALUE and held for review even when abnormal results are not.
+PLAUSIBLE_LIMITS = {
+    "glucose": (10.0, 2000.0),
+    "hemoglobin": (2.0, 25.0),
+    "hematocrit": (5.0, 75.0),
+    "white_blood_cell_count": (0.01, 1000.0),
+    "platelet_count": (1.0, 3000.0),
+}
+
 def canonical_unit(field_name: str) -> Optional[str]:
     ref = REFERENCE_RANGES.get(field_name)
     return ref["unit"] if ref else None

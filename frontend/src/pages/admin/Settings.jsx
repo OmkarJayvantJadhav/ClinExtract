@@ -128,6 +128,49 @@ function ThresholdsCard({ thresholds, editable }) {
   );
 }
 
+function ReviewPolicyCard({ policy, editable }) {
+  const queryClient = useQueryClient();
+  const [reviewAbnormal, setReviewAbnormal] = useState(policy.review_abnormal_results);
+  const [saved, setSaved] = useState(false);
+  const mutation = useMutation({
+    mutationFn: () => fetchApi('/settings/review-policy', {
+      method: 'PUT',
+      body: JSON.stringify({ review_abnormal_results: reviewAbnormal }),
+    }),
+    onSuccess: () => {
+      setSaved(true);
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Review Policy</CardTitle>
+        <CardDescription>
+          {editable ? 'Changes apply to documents processed afterwards.' : 'Only administrators can change this.'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <Label htmlFor="review-abnormal" className="text-sm font-medium">Hold abnormal results for review</Label>
+            <p className="text-xs text-muted-foreground">
+              Off: results outside the reference range are flagged on the record but do not stop auto-acceptance.
+              Values far outside any plausible result (a likely misread) always go to review.
+            </p>
+          </div>
+          <input id="review-abnormal" type="checkbox" className="mt-1 h-4 w-4 accent-primary" disabled={!editable}
+            checked={reviewAbnormal} onChange={e => { setSaved(false); setReviewAbnormal(e.target.checked); }} />
+        </div>
+        {mutation.isError && <p className="text-sm text-destructive">{mutation.error.message}</p>}
+        {saved && <p className="text-sm text-success">Review policy saved.</p>}
+        {editable && <Button className="w-fit" onClick={() => mutation.mutate()} disabled={mutation.isPending}>Save policy</Button>}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function Settings() {
   const { user, hasRole, logout } = useAuth();
   const navigate = useNavigate();
@@ -179,9 +222,14 @@ export function Settings() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="confidence" className="mt-6">
+        <TabsContent value="confidence" className="mt-6 grid gap-6">
           {settings
-            ? <ThresholdsCard key={JSON.stringify(settings.confidence_thresholds)} thresholds={settings.confidence_thresholds} editable={hasRole('ADMIN')} />
+            ? <>
+                <ThresholdsCard key={JSON.stringify(settings.confidence_thresholds)} thresholds={settings.confidence_thresholds} editable={hasRole('ADMIN')} />
+                {settings.review_policy && (
+                  <ReviewPolicyCard key={JSON.stringify(settings.review_policy)} policy={settings.review_policy} editable={hasRole('ADMIN')} />
+                )}
+              </>
             : <p className="text-sm text-muted-foreground">Loading…</p>}
         </TabsContent>
 
