@@ -80,6 +80,8 @@ def test_out_of_range_is_not_a_blocking_state():
     # Abnormal results force review but must remain approvable as-is
     assert "OUTSIDE_REFERENCE_RANGE" not in BLOCKING_STATES
     assert {"MISSING", "INVALID_FORMAT"} <= BLOCKING_STATES
+    # A likely misread value needs a look, but a genuine extreme result must stay approvable
+    assert "EXTREME_VALUE" not in BLOCKING_STATES
 
 
 # --- rule-based extractor ----------------------------------------------------

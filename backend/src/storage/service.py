@@ -1,3 +1,4 @@
+import io
 import typing
 import uuid
 import filetype
@@ -41,6 +42,19 @@ class StorageService:
         Reads the file, validates it, and stores it using the backend.
         Returns (storage_key, mime_type, file_size).
         """
+        file_bytes, mime_type = await self.read_upload(upload_file)
+        return await self.store_bytes(file_bytes), mime_type, len(file_bytes)
+
+    async def store_bytes(self, file_bytes: bytes) -> str:
+        """Stores an already validated document; returns its new storage key."""
+        storage_key = str(uuid.uuid4())
+        await self.backend.upload_file(storage_key, io.BytesIO(file_bytes))
+        return storage_key
+
+    async def read_upload(self, upload_file: UploadFile) -> typing.Tuple[bytes, str]:
+        """
+        Reads and validates an upload without storing it. Returns (file_bytes, mime_type).
+        """
         # Fail fast on an honest size declaration, then enforce the limit while reading so
         # an oversized body is never held in memory in full.
         if upload_file.size is not None and upload_file.size > MAX_FILE_SIZE:
@@ -60,16 +74,7 @@ class StorageService:
             chunks.append(chunk)
         file_bytes = b"".join(chunks)
         mime_type = self.validate_file(file_bytes, upload_file.filename)
-        
-        # Reset the stream position for the backend
-        await upload_file.seek(0)
-        
-        storage_key = str(uuid.uuid4())
-        
-        # We can pass upload_file.file directly which is a SpooledTemporaryFile (binary stream)
-        await self.backend.upload_file(storage_key, upload_file.file)
-        
-        return storage_key, mime_type, len(file_bytes)
+        return file_bytes, mime_type
 
     async def store_artifact(self, storage_key: str, data: str) -> str:
         """
@@ -82,7 +87,19 @@ class StorageService:
     def artifact_key(storage_key: str) -> str:
         return f"{storage_key}_ocr.json"
 
+    @staticmethod
+    def page_image_key(storage_key: str, page_number: int) -> str:
+        return f"{storage_key}_page{page_number}.png"
+
+    async def store_page_image(self, storage_key: str, page_number: int, png: bytes) -> None:
+        await self.backend.upload_binary_artifact(self.page_image_key(storage_key, page_number), png)
+
+    async def get_page_image(self, storage_key: str, page_number: int) -> bytes:
+        """Raises FileNotFoundError when the page has not been rendered yet."""
+        return await self.backend.get_binary_artifact(self.page_image_key(storage_key, page_number))
+
     async def delete_document_files(self, storage_key: str) -> None:
-        """Removes the stored document and its OCR artifact (missing files are ignored)."""
+        """Removes the stored document, its OCR artifact and rendered pages (missing files are ignored)."""
         await self.backend.delete_file(storage_key)
         await self.backend.delete_artifact(self.artifact_key(storage_key))
+        await self.backend.delete_artifacts_with_prefix(f"{storage_key}_page")

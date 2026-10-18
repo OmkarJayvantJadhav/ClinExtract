@@ -146,3 +146,48 @@ async def test_process_scanned_image(db_session, user, fake_scanned_png_bytes):
         
     assert data["pages"][0]["source_type"] == "OCR"
     assert "Scanned" in data["pages"][0]["text"]
+
+
+def _mixed_page_pdf() -> bytes:
+    """A typed header with the results pasted underneath as a picture (no text layer)."""
+    import fitz
+    results = fitz.open()
+    results.new_page(width=400, height=150).insert_text((20, 60), "Glucose: 92 mg/dL", fontsize=24)
+    picture = results[0].get_pixmap(dpi=200).tobytes("png")
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((50, 60), "City Lab Report - Patient Name: Jane Doe", fontsize=12)
+    page.insert_image(fitz.Rect(50, 100, 450, 250), stream=picture)
+    return doc.write()
+
+
+def test_mixed_page_reads_text_inside_images():
+    from src.processing.analyzer import DocumentAnalyzer
+    artifact = DocumentAnalyzer.process(_mixed_page_pdf(), "application/pdf", "doc", "job")
+    page = artifact["pages"][0]
+
+    assert page["source_type"] == "MIXED" and page["ocr_used"]
+    texts = [w["text"] for w in page["words"]]
+    assert "Jane" in texts  # native header kept
+    assert "Glucose:" in texts and "92" in texts  # read from the image
+
+    # The OCR'd word sits inside the image area, in page coordinates
+    x, y, w, h = next(w["bbox"] for w in page["words"] if w["text"] == "92")
+    page_w, page_h = 612, 792
+    assert 50 / page_w <= x and x + w <= 450 / page_w
+    assert 100 / page_h <= y and y + h <= 250 / page_h
+
+
+def test_small_images_on_text_pages_are_not_ocrd():
+    import fitz
+    from src.processing.analyzer import DocumentAnalyzer
+    logo = fitz.open()
+    logo.new_page(width=40, height=40).insert_text((5, 25), "LOGO", fontsize=10)
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((50, 60), "Patient Name: Jane Doe  Glucose: 92 mg/dL", fontsize=12)
+    page.insert_image(fitz.Rect(500, 20, 540, 60), stream=logo[0].get_pixmap().tobytes("png"))
+
+    page_data = DocumentAnalyzer.process(doc.write(), "application/pdf", "doc", "job")["pages"][0]
+    assert page_data["source_type"] == "PDF_NATIVE" and not page_data["ocr_used"]

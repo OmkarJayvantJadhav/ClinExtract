@@ -50,10 +50,13 @@ async def _create_test_schema():
     yield
 
 @pytest.fixture(autouse=True)
-def _reset_login_rate_limit():
+async def _reset_login_rate_limit():
     # The suite logs in far more often than the per-IP production limit allows
-    from src.api.routes.auth import login_limiter
-    login_limiter.reset()
+    from sqlalchemy import delete
+    from src.db.models.login_attempt import LoginAttempt
+    async with async_session_maker() as session:
+        await session.execute(delete(LoginAttempt))
+        await session.commit()
     yield
 
 @pytest.fixture

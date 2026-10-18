@@ -15,15 +15,23 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    # Documents take seconds to minutes each, so a worker process should only reserve the job
+    # it is running. With the default (4) idle processes can sit waiting while one busy
+    # process holds several queued documents.
+    worker_prefetch_multiplier=1,
     # In a testing environment, we can run tasks eagerly
     task_always_eager=settings.APP_ENV == "testing",
     task_eager_propagates=True,
-    # Run by the `beat` service (see docker-compose); the task is a no-op unless
-    # DOCUMENT_RETENTION_DAYS > 0.
+    # Run by the `beat` service (see docker-compose). The retention purge is a no-op unless
+    # DOCUMENT_RETENTION_DAYS > 0; the stuck-job sweep resends jobs whose message was lost.
     beat_schedule={
         "purge-expired-documents": {
             "task": "purge_expired_documents",
             "schedule": crontab(hour=3, minute=0),
+        },
+        "requeue-stuck-jobs": {
+            "task": "requeue_stuck_jobs",
+            "schedule": crontab(minute="*/10"),
         },
     },
 )

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { Search, Eye, Trash2, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, Eye, Trash2, Loader2, ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Input } from '@/components/ui/input';
@@ -10,8 +10,8 @@ import { Button } from '@/components/ui/button';
 import { DocumentStatusBadge, ConfidenceIndicator } from '@/components/common/StatusPrimitives';
 import { EmptyState, ErrorState } from '@/components/common/FeedbackStates';
 import { DeleteDocumentDialog } from '@/features/documents/DeleteDocumentDialog';
-import { fetchApi } from '@/services/apiClient';
-import { buildDocumentQuery } from '@/lib/documentQuery';
+import { fetchApi, apiUrl } from '@/services/apiClient';
+import { buildDocumentQuery, buildExportQuery } from '@/lib/documentQuery';
 import { useAuth } from '@/context/AuthContext';
 
 const STATUSES = [
@@ -72,9 +72,22 @@ export function Library() {
           <p className="text-muted-foreground">Search and track all clinical documents.</p>
         </div>
         {hasRole(['ADMIN', 'OPERATOR']) && (
-          <Button asChild>
-            <Link to="/documents/upload">Upload Document</Link>
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" asChild
+              title={statusFilter === 'ALL' ? 'Final documents (auto-accepted or approved) matching the filters' : 'Documents matching the filters'}>
+              <a href={apiUrl(buildExportQuery(filters, 'csv'))} download>
+                <Download className="h-4 w-4 mr-2" /> Export CSV
+              </a>
+            </Button>
+            <Button variant="outline" asChild title="Same as CSV, with printed and normalized values">
+              <a href={apiUrl(buildExportQuery(filters, 'json'))} download>
+                <Download className="h-4 w-4 mr-2" /> JSON
+              </a>
+            </Button>
+            <Button asChild>
+              <Link to="/documents/upload">Upload Documents</Link>
+            </Button>
+          </div>
         )}
       </div>
 

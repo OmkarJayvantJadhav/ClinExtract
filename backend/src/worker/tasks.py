@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import filetype
-from sqlalchemy import select
+from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from src.worker.celery_app import celery_app
@@ -135,16 +135,27 @@ async def process_document_async(job_id: str, attempt: int = 1, session_maker: O
     artifact = DocumentAnalyzer.process(file_bytes, mime_type, doc_id_str, str(job_uuid))
     await storage.store_artifact(storage_key, json.dumps(artifact, indent=2))
 
+    # Pre-render the review viewer's page images so opening a document doesn't re-render the
+    # PDF on every view. Not essential: the viewer renders missing pages on demand.
+    if mime_type == "application/pdf":
+        from src.processing.page_images import render_pdf_pages
+        try:
+            for page_number, png in render_pdf_pages(file_bytes):
+                await storage.store_page_image(storage_key, page_number, png)
+        except Exception as e:
+            logger.warning(f"Could not pre-render page images: {e}")
+
     # 3. Transaction B: extraction + validation + final statuses, committed atomically.
     # A failure anywhere here rolls everything back, so a retry starts clean.
     from src.validation.engine import ValidationEngine
 
-    from src.services.system_settings import get_thresholds
+    from src.services.system_settings import get_thresholds, get_review_policy
 
     async with session_maker() as session:
         thresholds = await get_thresholds(session)
+        review_policy = await get_review_policy(session)
         extraction = await _extract_with_fallback(session, doc_id_str, artifact, file_bytes)
-        ValidationEngine.from_thresholds(thresholds).validate_extraction(extraction, artifact)
+        ValidationEngine.from_thresholds(thresholds, review_policy).validate_extraction(extraction, artifact)
         final_decision = extraction.decision
 
         job2 = await session.get(ProcessingJob, job_uuid)
@@ -232,6 +243,54 @@ def process_document_job(self, job_id: str, correlation_id: str = None):
     finally:
         correlation_id_var.reset(t1)
         job_id_var.reset(t2)
+
+async def requeue_stuck_jobs(session, enqueue, now: Optional[datetime] = None) -> list:
+    """
+    Sends lost jobs to the worker again: QUEUED/RETRYING jobs with no progress for
+    STUCK_JOB_MINUTES (the message was lost, e.g. a broker restart) and RUNNING jobs with no
+    progress for JOB_STALE_AFTER_MINUTES (the worker died; longer than the task time limit).
+    Those are reset to QUEUED. Each job is touched so the next sweep doesn't send it again
+    straight away; a duplicate message is harmless because the task locks the job first.
+    Returns the requeued job ids.
+    """
+    now = now or datetime.now(timezone.utc)
+    waiting_cutoff = now - timedelta(minutes=settings.STUCK_JOB_MINUTES)
+    running_cutoff = now - timedelta(minutes=settings.JOB_STALE_AFTER_MINUTES)
+    stmt = (
+        select(ProcessingJob)
+        .where(or_(
+            and_(ProcessingJob.status.in_([JobStatus.QUEUED, JobStatus.RETRYING]), ProcessingJob.updated_at < waiting_cutoff),
+            and_(ProcessingJob.status == JobStatus.RUNNING, ProcessingJob.updated_at < running_cutoff),
+        ))
+        .order_by(ProcessingJob.updated_at)
+        .limit(100)
+        .with_for_update(skip_locked=True)
+    )
+    jobs = (await session.execute(stmt)).scalars().all()
+    requeued = []
+    for job in jobs:
+        if job.status == JobStatus.RUNNING:
+            job.status = JobStatus.QUEUED
+        job.updated_at = now
+        requeued.append((str(job.id), job.correlation_id))
+    await session.commit()
+    for job_id, correlation_id in requeued:
+        enqueue(job_id, correlation_id)
+    return [job_id for job_id, _ in requeued]
+
+async def _requeue_stuck(session_maker: async_sessionmaker) -> list:
+    async with session_maker() as session:
+        return await requeue_stuck_jobs(
+            session, lambda job_id, cid: process_document_job.delay(job_id, cid)
+        )
+
+@celery_app.task(name="requeue_stuck_jobs")
+def requeue_stuck_jobs_task():
+    """Scheduled every 10 minutes by Celery beat."""
+    requeued = _run(_requeue_stuck(_get_worker_session_maker()))
+    if requeued:
+        logger.warning(f"Requeued {len(requeued)} stuck processing job(s)", extra={"event": "jobs_requeued"})
+    return f"Requeued {len(requeued)} job(s)"
 
 async def _purge_expired(session_maker: async_sessionmaker) -> int:
     from src.services.retention import purge_expired_documents

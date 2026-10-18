@@ -9,9 +9,23 @@ _LABELS = (
     r"Hemoglobin|Haemoglobin|Hgb|Hematocrit|Haematocrit|Hct|White|WBC|Platelets?|PLT|Specimen|Sample|"
     r"Collect(?:ion|ed)|Received|Accession|Ordering|Physician|Doctor|Report"
 )
-_DATE = r"\d{4}-\d{1,2}-\d{1,2}|\d{4}/\d{1,2}/\d{1,2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}-\d{1,2}-\d{4}|\d{1,2}\.\d{1,2}\.\d{4}"
+_MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?"
+# ISO, numeric day/month, dotted, and month-name dates (14-Mar-1985, 14 March 1985, Mar 14, 1985)
+_DATE = rf"\d{{1,2}}[-\s]{_MONTH}[-\s]\d{{4}}|{_MONTH}\s+\d{{1,2}},?\s+\d{{4}}|" r"\d{4}-\d{1,2}-\d{1,2}|\d{4}/\d{1,2}/\d{1,2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}-\d{1,2}-\d{4}|\d{1,2}\.\d{1,2}\.\d{4}"
 _COUNT_UNIT = r"(?:x\s*)?10\^?[39]\s*/\s*[uµμ]?L|K/[uµμ]L|thou/[uµμ]L|cells/[uµμ]L|/[uµμ]L|/mm3"
 _NUMBER = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
+# Abnormal flag printed next to a result (H, L, HH, LL, High, Low). Not followed by a letter or
+# "/", so the "L" of a unit such as "L/L" or the start of the next label is never taken as a flag.
+_FLAG = r"(?:HH|LL|HIGH|LOW|H|L)(?![\w/])"
+# The report's own reference range: "70 - 100", "13.5-17.5", "(4.5 to 11.0)", "<200", ">= 60"
+_RANGE = rf"(?:{_NUMBER})\s*(?:-|\u2013|to)\s*(?:{_NUMBER})|(?:<=?|>=?|\u2264|\u2265)\s*(?:{_NUMBER})"
+
+def _result(unit_pattern: str) -> str:
+    """Value, then optional flag, unit, flag and printed reference range, in table-row order."""
+    return (
+        rf"(?P<value>{_NUMBER})(?:\s*(?P<flag>{_FLAG}))?\s*(?P<unit>{unit_pattern})?"
+        rf"(?:\s*(?P<flag2>{_FLAG}))?(?:\s*\(?\s*(?P<ref>{_RANGE})\s*\)?)?"
+    )
 
 class RuleBasedExtractor(BaseExtractor):
     def __init__(self):
@@ -26,11 +40,11 @@ class RuleBasedExtractor(BaseExtractor):
             {"field_name": "specimen_type", "pattern": r"(?i)(?:specimen|sample)(?:\s*type)?\s*:?\s*(?P<value>whole\s+blood|blood|urine|saliva|serum|plasma)\b"},
             {"field_name": "collection_date", "pattern": rf"(?i)(?:collection\s*date|date\s*collected|collected(?:\s*on)?|draw\s*date)\s*:?\s*(?P<value>{_DATE})"},
             {"field_name": "received_date", "pattern": rf"(?i)(?:received\s*date|date\s*received|received(?:\s*on)?)\s*:?\s*(?P<value>{_DATE})"},
-            {"field_name": "glucose", "pattern": rf"(?i)\bglucose(?:,?\s*(?:fasting|random|serum|plasma))?\s*:?\s*(?P<value>{_NUMBER})\s*(?P<unit>mg/dL|mmol/L)?"},
-            {"field_name": "hemoglobin", "pattern": rf"(?i)\b(?:hemoglobin|haemoglobin|hgb|hb)\b\s*:?\s*(?P<value>{_NUMBER})\s*(?P<unit>g/dL|g/L|mmol/L)?"},
-            {"field_name": "hematocrit", "pattern": rf"(?i)\b(?:hematocrit|haematocrit|hct)\b\s*:?\s*(?P<value>{_NUMBER})\s*(?P<unit>%|L/L)?"},
-            {"field_name": "white_blood_cell_count", "pattern": rf"(?i)\b(?:white\s*blood\s*cell(?:s|\s*count)?|wbc(?:\s*count)?|leukocytes?)\b\s*:?\s*(?P<value>{_NUMBER})\s*(?P<unit>{_COUNT_UNIT})?"},
-            {"field_name": "platelet_count", "pattern": rf"(?i)\b(?:platelets?(?:\s*count)?|plt)\b\s*:?\s*(?P<value>{_NUMBER})\s*(?P<unit>{_COUNT_UNIT})?"},
+            {"field_name": "glucose", "pattern": rf"(?i)\b(?:glucose|glu)(?:,?\s*(?:fasting|random|serum|plasma))?\s*:?\s*{_result('mg/dL|mmol/L')}"},
+            {"field_name": "hemoglobin", "pattern": rf"(?i)\b(?:hemoglobin|haemoglobin|hgb|hb)\b\s*:?\s*{_result('g/dL|g/L|mmol/L')}"},
+            {"field_name": "hematocrit", "pattern": rf"(?i)\b(?:hematocrit|haematocrit|hct)\b\s*:?\s*{_result('%|L/L')}"},
+            {"field_name": "white_blood_cell_count", "pattern": rf"(?i)\b(?:white\s*blood\s*cell(?:s|\s*count)?|wbc(?:\s*count)?|leukocytes?)\b\s*:?\s*{_result(_COUNT_UNIT)}"},
+            {"field_name": "platelet_count", "pattern": rf"(?i)\b(?:platelets?(?:\s*count)?|plt)\b\s*:?\s*{_result(_COUNT_UNIT)}"},
         ]
 
     def extract(self, document_data: Dict[str, Any], metadata: Dict[str, Any] = None) -> ExtractionResult:
@@ -66,7 +80,10 @@ class RuleBasedExtractor(BaseExtractor):
                 val = match.group("value").strip()
                 if not val:
                     continue
-                unit = match.groupdict().get("unit")
+                groups = match.groupdict()
+                unit = groups.get("unit")
+                flag = groups.get("flag") or groups.get("flag2")
+                ref = groups.get("ref")
 
                 # Highlight the value and its unit together
                 m_start = match.start("value")
@@ -82,6 +99,8 @@ class RuleBasedExtractor(BaseExtractor):
                     field_name=rule["field_name"],
                     value=val,
                     unit=unit.strip() if unit else None,
+                    reference_range=ref.strip() if ref else None,
+                    abnormal_flag=flag.upper() if flag else None,
                     confidence=self._compute_avg_confidence(matched_words),
                     page_num=page_num,
                     bbox_normalized=self._compute_union_bbox(matched_words)

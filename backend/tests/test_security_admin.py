@@ -170,3 +170,179 @@ def test_non_admin_cannot_delete(new_user, admin):
     viewer, _ = login(new_user["username"], STRONG)
     r = viewer.delete(f"/api/v1/documents/{uuid.uuid4()}", params={"reason": "x-x-x"})
     assert r.status_code == 403
+
+
+# --- review policy, queue order, reprocessing ------------------------------------
+
+def test_review_policy_settings(admin, new_user):
+    original = admin.get("/api/v1/settings").json()["review_policy"]
+    assert original == {"review_abnormal_results": False}
+    try:
+        r = admin.put("/api/v1/settings/review-policy", json={"review_abnormal_results": True})
+        assert r.status_code == 200 and r.json()["review_policy"]["review_abnormal_results"] is True
+        assert admin.get("/api/v1/settings").json()["review_policy"]["review_abnormal_results"] is True
+        viewer, _ = login(new_user["username"], STRONG)
+        assert viewer.put("/api/v1/settings/review-policy", json={"review_abnormal_results": False}).status_code == 403
+    finally:
+        admin.put("/api/v1/settings/review-policy", json=original)
+
+def test_list_documents_oldest_first(admin):
+    tag = uuid.uuid4().hex[:8]
+    ids = []
+    for i in range(3):
+        r = admin.post("/api/v1/documents", files={"file": (f"order_{tag}_{i}.pdf", io.BytesIO(_pdf(f"Doc {i}")), "application/pdf")})
+        assert r.status_code == 201
+        ids.append(r.json()["id"])
+
+    def listed(sort):
+        items = admin.get("/api/v1/documents", params={"q": f"order_{tag}", "sort": sort}).json()["items"]
+        return [d["id"] for d in items]
+
+    assert listed("oldest") == ids
+    assert listed("newest") == ids[::-1]
+    assert admin.get("/api/v1/documents", params={"sort": "random"}).status_code == 422
+
+def test_reprocess_failed_document(admin, new_user, monkeypatch):
+    import fitz
+    from src.core.config import settings
+    monkeypatch.setattr(settings, "MAX_DOCUMENT_PAGES", 2)
+    doc = fitz.open()
+    for _ in range(3):
+        doc.new_page().insert_text(fitz.Point(50, 50), "Patient Name: Retry Case Glucose: 90 mg/dL", fontsize=12)
+    r = admin.post("/api/v1/documents", files={"file": ("too_long.pdf", io.BytesIO(doc.write()), "application/pdf")})
+    doc_id = r.json()["id"]
+    assert admin.get(f"/api/v1/documents/{doc_id}").json()["status"] == "FAILED"
+
+    # Only admins/operators may retry
+    viewer, _ = login(new_user["username"], STRONG)
+    assert viewer.post(f"/api/v1/documents/{doc_id}/reprocess").status_code == 403
+
+    # The cause is fixed, so the retry succeeds without a re-upload
+    monkeypatch.setattr(settings, "MAX_DOCUMENT_PAGES", 50)
+    r = admin.post(f"/api/v1/documents/{doc_id}/reprocess")
+    assert r.status_code == 200, r.text
+    detail = admin.get(f"/api/v1/documents/{doc_id}").json()
+    assert detail["status"] in ("REVIEW_REQUIRED", "AUTO_ACCEPTED")
+    assert detail["extractions"]
+
+    # A document that did not fail cannot be reprocessed
+    assert admin.post(f"/api/v1/documents/{doc_id}/reprocess").status_code == 409
+    assert admin.post(f"/api/v1/documents/{uuid.uuid4()}/reprocess").status_code == 404
+
+    actions = [i["action"] for i in admin.get("/api/v1/audit", params={"document_id": doc_id}).json()["items"]]
+    assert "DOCUMENT_REPROCESS_REQUESTED" in actions
+
+
+# --- public demo accounts -------------------------------------------------------
+
+def test_demo_accounts(admin, monkeypatch):
+    from src.core.config import settings
+    username = f"demo_{uuid.uuid4().hex[:8]}"
+    assert admin.post("/api/v1/users", json={"username": username, "role": "REVIEWER", "password": STRONG}).status_code == 201
+
+    anon = TestClient(app)
+    assert anon.get("/api/v1/auth/demo").json() == {"enabled": False, "accounts": []}
+
+    # The admin account is never offered or treated as a demo account
+    monkeypatch.setattr(settings, "DEMO_ACCOUNTS", f"{username}, admin")
+    monkeypatch.setattr(settings, "DEMO_PASSWORD", STRONG)
+    info = anon.get("/api/v1/auth/demo").json()
+    assert info == {"enabled": True, "accounts": [{"username": username, "role": "REVIEWER"}], "password": STRONG}
+
+    # Failed logins never lock a shared account
+    for _ in range(8):
+        assert anon.post("/api/v1/auth/login", json={"username": username, "password": "wrong"}).status_code == 401
+    demo, r = login(username, STRONG)
+    assert r.status_code == 200
+
+    # A visitor cannot take the account away from everyone else
+    r = demo.post("/api/v1/auth/change-password", json={"current_password": STRONG, "new_password": "An0ther-Passw0rd!"})
+    assert r.status_code == 403
+    assert demo.post("/api/v1/auth/logout-all").status_code == 403
+    assert demo.get("/api/v1/auth/me").status_code == 200
+
+
+# --- review speed: stored page images, priority order, claim keep-alive -----------
+
+def test_page_images_are_stored_served_and_deleted(admin):
+    from src.storage import get_storage_service
+    storage = get_storage_service()
+    tag = uuid.uuid4().hex[:8]
+    r = admin.post("/api/v1/documents", files={"file": (f"pages_{tag}.pdf", io.BytesIO(_pdf(f"Patient Name: P {tag}")), "application/pdf")})
+    doc_id = r.json()["id"]
+    admin.get(f"/api/v1/documents/{doc_id}")  # processed eagerly in tests
+    from sqlalchemy import create_engine, text
+    from src.core.config import settings
+    engine = create_engine(settings.DATABASE_URL)
+    with engine.connect() as conn:
+        storage_key = conn.execute(text("select storage_key from documents where id = :i"), {"i": doc_id}).scalar_one()
+    engine.dispose()
+
+    # Rendered during processing, and served as-is
+    stored = os.path.join(storage.backend.artifacts_dir, storage.page_image_key(storage_key, 1))
+    assert os.path.exists(stored)
+    page = admin.get(f"/api/v1/documents/{doc_id}/pages/1/image")
+    assert page.status_code == 200 and page.content[:4] == b"\x89PNG"
+    assert admin.get(f"/api/v1/documents/{doc_id}/pages").json() == {"page_count": 1}
+    assert admin.get(f"/api/v1/documents/{doc_id}/pages/2/image").status_code == 404
+
+    # Removed with the document
+    assert admin.delete(f"/api/v1/documents/{doc_id}", params={"reason": "test cleanup"}).status_code == 204
+    assert not os.path.exists(stored)
+
+
+def _report_pdf(lines):
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page()
+    for i, line in enumerate(lines):
+        page.insert_text(fitz.Point(50, 50 + 18 * i), line, fontsize=11)
+    return doc.write()
+
+def test_priority_sort_puts_possible_misreads_first(admin):
+    tag = uuid.uuid4().hex[:8]
+    fields = [f"Patient Name: Q{tag}", f"Patient ID: Z-{tag}", "DOB: 1990-01-01", "Specimen Type: Blood",
+              "Collection Date: 2026-01-02", "Received Date: 2026-01-03", "Glucose: 92 mg/dL"]
+    def upload(name, hemoglobin):
+        pdf = _report_pdf(fields + [f"Hemoglobin: {hemoglobin} g/dL"])
+        return admin.post("/api/v1/documents", files={"file": (name, io.BytesIO(pdf), "application/pdf")}).json()["id"]
+    normal = upload(f"prio_{tag}_a.pdf", "14.5")
+    misread = upload(f"prio_{tag}_b.pdf", "1.45")
+    items = admin.get("/api/v1/documents", params={"q": f"prio_{tag}", "sort": "priority"}).json()["items"]
+    assert [d["id"] for d in items] == [misread, normal]
+    assert [d["needs_attention"] for d in items] == [True, False]
+
+
+def test_review_heartbeat_keeps_the_claim(admin, new_user):
+    tag = uuid.uuid4().hex[:8]
+    doc_id = admin.post("/api/v1/documents", files={"file": (f"hb_{tag}.pdf", io.BytesIO(_pdf("Patient Name: Missing Fields")), "application/pdf")}).json()["id"]
+    assert admin.get(f"/api/v1/documents/{doc_id}").json()["status"] == "REVIEW_REQUIRED"
+    assert admin.post(f"/api/v1/reviews/{doc_id}/heartbeat").status_code == 404  # nothing claimed yet
+    review = admin.post(f"/api/v1/reviews/{doc_id}/claim").json()
+    r = admin.post(f"/api/v1/reviews/{doc_id}/heartbeat")
+    assert r.status_code == 200 and r.json()["id"] == review["id"]
+    # Another user cannot keep someone else's claim alive
+    other, _ = login(new_user["username"], STRONG)
+    assert other.post(f"/api/v1/reviews/{doc_id}/heartbeat").status_code in (403, 404)
+    admin.post(f"/api/v1/reviews/{doc_id}/release")
+
+
+# --- login rate limit shared across processes ---------------------------------------
+
+def test_login_rate_limit_is_enforced(monkeypatch):
+    from src.api.routes.auth import login_limiter
+    monkeypatch.setattr(login_limiter, "limit", 3)
+    anon = TestClient(app)
+    codes = [anon.post("/api/v1/auth/login", json={"username": "nobody", "password": "x"}).status_code for _ in range(5)]
+    assert codes == [401, 401, 401, 429, 429]
+
+
+async def test_rate_limit_is_shared_between_processes(db_session):
+    from src.core.rate_limit import DatabaseRateLimiter
+    # Two limiters stand in for two API processes: they see each other's attempts
+    first, second = DatabaseRateLimiter(2, 60), DatabaseRateLimiter(2, 60)
+    key = f"ip-{uuid.uuid4().hex[:8]}"
+    assert await first.allow(db_session, key)
+    assert await second.allow(db_session, key)
+    assert not await first.allow(db_session, key)
+    assert await second.allow(db_session, f"{key}-other")  # per client

@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchApi, getDocumentAudit, apiUrl } from '@/services/apiClient';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { DocumentStatusBadge, ConfidenceIndicator } from '@/components/common/StatusPrimitives';
+import { DocumentStatusBadge, ConfidenceIndicator, ValidationBadge } from '@/components/common/StatusPrimitives';
 import { EmptyState } from '@/components/common/FeedbackStates';
-import { ArrowLeft, Edit, Clock, Download, Loader2, User, Trash2 } from 'lucide-react';
+import { ArrowLeft, Edit, Clock, Download, Loader2, User, Trash2, RotateCcw } from 'lucide-react';
 import { DeleteDocumentDialog } from '@/features/documents/DeleteDocumentDialog';
 import { useAuth } from '@/context/AuthContext';
 import { ProcessingStatus } from './ProcessingStatus';
@@ -16,6 +16,12 @@ export function DocumentDetails() {
   const navigate = useNavigate();
   const { hasRole } = useAuth();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const reprocess = useMutation({
+    mutationFn: () => fetchApi(`/documents/${id}/reprocess`, { method: 'POST' }),
+    // The document goes back to UPLOADED, which restarts the status polling below
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['document', id] }),
+  });
 
   // Real API Fetch with Polling
   const { data: doc, isLoading, error } = useQuery({
@@ -43,10 +49,10 @@ export function DocumentDetails() {
       ...extraction,
       patientInfo: extraction.extracted_fields
         .filter(f => patientFields.includes(f.field_name) || specimenFields.includes(f.field_name))
-        .map(f => ({ id: f.id, name: f.field_name.replace(/_/g, ' '), value: f.current_value, corrected: f.is_corrected, state: f.validation_state })),
+        .map(f => ({ id: f.id, name: f.field_name.replace(/_/g, ' '), value: f.current_value, corrected: f.is_corrected, state: f.validation_state, message: f.validation_messages?.[0] })),
       laboratoryResults: extraction.extracted_fields
         .filter(f => !patientFields.includes(f.field_name) && !specimenFields.includes(f.field_name))
-        .map(f => ({ id: f.id, name: f.field_name.replace(/_/g, ' '), value: f.current_value, unit: f.unit || '', corrected: f.is_corrected, state: f.validation_state }))
+        .map(f => ({ id: f.id, name: f.field_name.replace(/_/g, ' '), value: f.current_value, unit: f.unit || '', referenceRange: f.reference_range, abnormalFlag: f.abnormal_flag, corrected: f.is_corrected, state: f.validation_state, message: f.validation_messages?.[0] }))
     };
   }
 
@@ -83,6 +89,14 @@ export function DocumentDetails() {
             <Button variant="outline" size="sm" className="text-destructive border-destructive/30 hover:bg-destructive/10"
               disabled={doc.status === 'PROCESSING'} onClick={() => setDeleteOpen(true)}>
               <Trash2 className="h-4 w-4 mr-2" /> Delete
+            </Button>
+          )}
+          {doc.status === 'FAILED' && hasRole(['ADMIN', 'OPERATOR']) && (
+            <Button size="sm" onClick={() => reprocess.mutate()} disabled={reprocess.isPending}>
+              {reprocess.isPending
+                ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                : <RotateCcw className="h-4 w-4 mr-2" />}
+              Retry processing
             </Button>
           )}
           {(doc.status === 'REVIEW_REQUIRED' || doc.status === 'REVIEW_IN_PROGRESS') && (
@@ -129,6 +143,7 @@ export function DocumentDetails() {
             </CardContent>
           </Card>
 
+          {reprocess.isError && <p className="text-sm text-destructive">{reprocess.error.message}</p>}
           <ProcessingStatus currentStatus={doc.status} />
         </div>
 
@@ -150,9 +165,12 @@ export function DocumentDetails() {
                       <h4 className="font-medium text-sm border-b pb-1 mb-3">Patient Information</h4>
                       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
                         {extraction.patientInfo.map(field => (
-                          <div key={field.id} className="flex justify-between p-2 rounded bg-muted/30">
-                            <dt className="text-muted-foreground">{field.name}</dt>
-                            <dd className="font-medium">{field.value ?? '—'}{field.corrected && <span className="ml-1 text-[10px] text-primary">(corrected)</span>}</dd>
+                          <div key={field.id} className="p-2 rounded bg-muted/30">
+                            <div className="flex justify-between">
+                              <dt className="text-muted-foreground">{field.name}</dt>
+                              <dd className="font-medium">{field.value ?? '—'}{field.corrected && <span className="ml-1 text-[10px] text-primary">(corrected)</span>}</dd>
+                            </div>
+                            <ValidationBadge state={field.state} message={field.message} />
                           </div>
                         ))}
                       </dl>
@@ -163,9 +181,18 @@ export function DocumentDetails() {
                       <h4 className="font-medium text-sm border-b pb-1 mb-3">Laboratory Results</h4>
                       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
                         {extraction.laboratoryResults.map(field => (
-                          <div key={field.id} className="flex justify-between p-2 rounded bg-muted/30">
-                            <dt className="text-muted-foreground">{field.name}</dt>
-                            <dd className="font-medium">{field.value ?? '—'} {field.unit}{field.corrected && <span className="ml-1 text-[10px] text-primary">(corrected)</span>}</dd>
+                          <div key={field.id} className="p-2 rounded bg-muted/30">
+                            <div className="flex justify-between">
+                              <dt className="text-muted-foreground">{field.name}</dt>
+                              <dd className="font-medium text-right">
+                                {field.value ?? '—'} {field.unit}
+                                {field.abnormalFlag && <span className="ml-1 text-xs font-semibold text-warning-foreground">{field.abnormalFlag}</span>}
+                                {field.corrected && <span className="ml-1 text-[10px] text-primary">(corrected)</span>}
+                                {field.referenceRange && <span className="block text-[11px] font-normal text-muted-foreground">ref {field.referenceRange}</span>}
+                              </dd>
+                            </div>
+                            {/* Abnormal results can be auto-accepted, so the flag must stay visible on the record */}
+                            <ValidationBadge state={field.state} message={field.message} />
                           </div>
                         ))}
                       </dl>

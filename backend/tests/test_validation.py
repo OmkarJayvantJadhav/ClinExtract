@@ -43,15 +43,44 @@ def test_source_mismatch(base_extraction):
     # confidence should be halved: 0.95 * 0.5 = 0.475 => 47.5% < 70% => LOW
     assert dob_field.confidence_category == "LOW"
 
-def test_out_of_range(base_extraction):
+def test_out_of_range_is_flagged_but_auto_accepted_by_default(base_extraction):
     engine = ValidationEngine()
     glucose = next(f for f in base_extraction.extracted_fields if f.field_name == "glucose")
     glucose.value = "110" # > 100
     engine.validate_extraction(base_extraction)
-    
-    assert base_extraction.decision == "REVIEW_REQUIRED"
+
+    # An abnormal result is a clinical finding, not an extraction problem
+    assert base_extraction.decision == "AUTO_ACCEPTED"
     assert glucose.validation_state == "OUTSIDE_REFERENCE_RANGE"
     assert glucose.confidence_category == "HIGH" # confidence is not reduced
+    assert "glucose: OUTSIDE_REFERENCE_RANGE" in base_extraction.validation_summary["messages"]
+
+def test_out_of_range_held_for_review_when_policy_asks(base_extraction):
+    engine = ValidationEngine.from_thresholds(
+        {"auto_accept": 0.9, "review_recommended": 0.9, "low_confidence": 0.7},
+        {"review_abnormal_results": True},
+    )
+    glucose = next(f for f in base_extraction.extracted_fields if f.field_name == "glucose")
+    glucose.value = "110"
+    engine.validate_extraction(base_extraction)
+    assert base_extraction.decision == "REVIEW_REQUIRED"
+
+def test_extreme_value_always_goes_to_review(base_extraction):
+    hgb = next(f for f in base_extraction.extracted_fields if f.field_name == "hemoglobin")
+    hgb.value = "1.45"  # "14.5" with a misread decimal point
+    ValidationEngine().validate_extraction(base_extraction)
+
+    assert hgb.validation_state == "EXTREME_VALUE"
+    assert "decimal point" in hgb.validation_messages[0]
+    assert base_extraction.decision == "REVIEW_REQUIRED"
+
+def test_extreme_value_is_checked_after_unit_conversion():
+    from src.validation.rules import validate_numeric_and_range
+    # 145 g/L is 14.5 g/dL: normal, not extreme
+    state, norm, _ = validate_numeric_and_range("hemoglobin", "145", "g/L")
+    assert (state, norm) == ("VALID", "14.5")
+    state, _, _ = validate_numeric_and_range("hemoglobin", "145", "g/dL")
+    assert state == "EXTREME_VALUE"
 
 def test_invalid_format(base_extraction):
     engine = ValidationEngine()

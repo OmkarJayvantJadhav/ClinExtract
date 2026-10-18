@@ -180,7 +180,9 @@ async def complete_review(
     for field in extraction.extracted_fields:
         if field.field_name not in VALIDATED_FIELDS:
             continue
-        results[field.id] = engine.validate_field(field.field_name, current_values[field.id], field.unit, context)
+        results[field.id] = engine.validate_field(
+            field.field_name, current_values[field.id], field.unit, context, field.reference_range, field.abnormal_flag
+        )
 
     inconsistencies = engine.check_cross_field(
         (fields_by_id[fid].field_name, res[0], res[3]) for fid, res in results.items()
@@ -274,6 +276,23 @@ async def release_review(
         user_id=current_user.id, after_state={"status": DocumentStatus.REVIEW_REQUIRED.value}
     )
 
+    await db.commit()
+    return await _load_review(db, review.id)
+
+@router.post("/{document_id}/heartbeat", response_model=ReviewResponse)
+async def review_heartbeat(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(REVIEW_ROLES))
+):
+    """
+    Keeps the current reviewer's claim alive while the review screen is open, so a long review
+    is not treated as abandoned after REVIEW_CLAIM_TIMEOUT_MINUTES.
+    """
+    review = await _active_review(db, document_id)
+    if not review or review.reviewer_id != current_user.id:
+        raise HTTPException(status_code=404, detail="You have no active review of this document")
+    review.updated_at = datetime.now(timezone.utc)
     await db.commit()
     return await _load_review(db, review.id)
 

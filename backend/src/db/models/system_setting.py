@@ -12,6 +12,7 @@ class SystemSetting(Base):
     key: Mapped[str] = mapped_column(String, primary_key=True)
     value: Mapped[dict] = mapped_column(JSONB)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), nullable=True,  # matches migration b7e4f19c2a51; always set on write
+        default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
     updated_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

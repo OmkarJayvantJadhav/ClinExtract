@@ -15,6 +15,14 @@ DEFAULT_THRESHOLDS = {
     "low_confidence": 0.70,      # fields below this are "LOW" and always force review
 }
 
+REVIEW_POLICY_KEY = "review_policy"
+
+DEFAULT_REVIEW_POLICY = {
+    # Hold documents with abnormal (outside reference range) results for human review even
+    # when everything was extracted cleanly. Off: abnormal results are flagged but auto-accepted.
+    "review_abnormal_results": False,
+}
+
 def validate_thresholds(values: dict) -> Optional[str]:
     auto, high, low = values["auto_accept"], values["review_recommended"], values["low_confidence"]
     if not all(isinstance(v, (int, float)) for v in (auto, high, low)):
@@ -45,4 +53,23 @@ async def set_thresholds(db: AsyncSession, values: dict, user_id: Optional[uuid.
         row.updated_by = user_id
     else:
         db.add(SystemSetting(key=THRESHOLDS_KEY, value=merged, updated_by=user_id))
+    return merged
+
+async def get_review_policy(db: AsyncSession) -> dict:
+    row = await db.get(SystemSetting, REVIEW_POLICY_KEY)
+    values = dict(DEFAULT_REVIEW_POLICY)
+    if row and isinstance(row.value, dict):
+        values.update({k: bool(v) for k, v in row.value.items() if k in DEFAULT_REVIEW_POLICY})
+    return values
+
+async def set_review_policy(db: AsyncSession, values: dict, user_id: Optional[uuid.UUID]) -> dict:
+    """Stages the new review policy (caller commits)."""
+    merged = await get_review_policy(db)
+    merged.update({k: bool(v) for k, v in values.items() if k in DEFAULT_REVIEW_POLICY and v is not None})
+    row = await db.get(SystemSetting, REVIEW_POLICY_KEY)
+    if row:
+        row.value = merged
+        row.updated_by = user_id
+    else:
+        db.add(SystemSetting(key=REVIEW_POLICY_KEY, value=merged, updated_by=user_id))
     return merged

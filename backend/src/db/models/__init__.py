@@ -8,9 +8,11 @@ from .review import Review, ReviewStatus
 from .field_correction import FieldCorrection
 from .audit_log import AuditLog
 from .system_setting import SystemSetting
+from .login_attempt import LoginAttempt
 
 __all__ = [
     "Base", "User", "UserRole", "Document", "DocumentStatus", 
     "ProcessingJob", "JobStatus", "Extraction", "ExtractedField",
-    "Review", "ReviewStatus", "FieldCorrection", "AuditLog", "SystemSetting"
+    "Review", "ReviewStatus", "FieldCorrection", "AuditLog", "SystemSetting",
+    "LoginAttempt",
 ]

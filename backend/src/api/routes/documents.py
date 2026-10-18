@@ -1,8 +1,12 @@
+import csv
+import hashlib
+import io
+import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
-from typing import Any
+from typing import Any, Literal
 
 import filetype
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Request, Query
@@ -31,7 +35,8 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 ALL_ROLES = [UserRole.ADMIN, UserRole.OPERATOR, UserRole.REVIEWER, UserRole.VIEWER]
-PAGE_RENDER_DPI = 150
+# Results that may be misread or critical: reviewed first under sort=priority
+ATTENTION_STATES = ("EXTREME_VALUE", "FLAG_MISMATCH", "POSSIBLE_MISREAD")
 
 def _list_item(doc: Document) -> DocumentListItem:
     item = DocumentListItem.model_validate(doc)
@@ -42,6 +47,7 @@ def _list_item(doc: Document) -> DocumentListItem:
         values = {f.field_name: f.current_value for f in extraction.extracted_fields}
         item.patient_name = values.get("patient_name")
         item.patient_id = values.get("patient_id")
+        item.needs_attention = any(f.validation_state in ATTENTION_STATES for f in extraction.extracted_fields)
     return item
 
 async def _log_access(db: AsyncSession, action: str, document_id: uuid.UUID, user: User, correlation_id=None) -> None:
@@ -69,6 +75,15 @@ def _like(term: str) -> str:
     escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
 
+def _needs_attention():
+    """EXISTS clause: the document's extraction has a result that may be misread or critical."""
+    return (
+        select(ExtractedField.id)
+        .join(Extraction, Extraction.id == ExtractedField.extraction_id)
+        .where(Extraction.document_id == Document.id, ExtractedField.validation_state.in_(ATTENTION_STATES))
+        .exists()
+    )
+
 def _patient_match(term: str):
     """EXISTS clause: the current extraction's patient name/id (original or corrected) contains `term`."""
     like = _like(term)
@@ -88,20 +103,8 @@ def _patient_match(term: str):
         .exists()
     )
 
-@router.get("", response_model=PaginatedDocumentResponse)
-async def list_documents(
-    status: list[DocumentStatus] | None = Query(None, description="Filter by one or more statuses"),
-    q: str | None = Query(None, max_length=200, description="Search filename, patient name or patient ID"),
-    created_from: datetime | None = Query(None, description="Uploaded at or after (ISO 8601)"),
-    created_to: datetime | None = Query(None, description="Uploaded before (ISO 8601)"),
-    page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles(ALL_ROLES))
-) -> Any:
-    """
-    Get paginated list of documents, newest first, with optional search and filters.
-    """
+def _filtered(status, q, created_from, created_to):
+    """Documents matching the list/export filters."""
     query = select(Document)
     if status:
         query = query.where(Document.status.in_(status))
@@ -112,11 +115,36 @@ async def list_documents(
         query = query.where(Document.created_at >= created_from)
     if created_to:
         query = query.where(Document.created_at < created_to)
+    return query
+
+def _ordering(sort: str) -> list:
+    if sort == "priority":
+        return [_needs_attention().desc(), Document.created_at.asc()]
+    return [Document.created_at.asc() if sort == "oldest" else Document.created_at.desc()]
+
+@router.get("", response_model=PaginatedDocumentResponse)
+async def list_documents(
+    status: list[DocumentStatus] | None = Query(None, description="Filter by one or more statuses"),
+    q: str | None = Query(None, max_length=200, description="Search filename, patient name or patient ID"),
+    created_from: datetime | None = Query(None, description="Uploaded at or after (ISO 8601)"),
+    created_to: datetime | None = Query(None, description="Uploaded before (ISO 8601)"),
+    sort: Literal["newest", "oldest", "priority"] = Query(
+        "newest", description="newest/oldest by upload time; priority: possible misreads and critical results first, then oldest"
+    ),
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(ALL_ROLES))
+) -> Any:
+    """
+    Get paginated list of documents with optional search and filters.
+    """
+    query = _filtered(status, q, created_from, created_to)
 
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
 
     query = (
-        query.order_by(Document.created_at.desc())
+        query.order_by(*_ordering(sort), Document.id)
         .offset((page - 1) * size)
         .limit(size)
         .options(selectinload(Document.extractions).selectinload(Extraction.extracted_fields).selectinload(ExtractedField.field_corrections))
@@ -132,10 +160,121 @@ async def list_documents(
         "pages": (total + size - 1) // size
     }
 
+EXPORT_FIELDS = [
+    "patient_name", "patient_id", "date_of_birth", "patient_sex", "specimen_type", "collection_date",
+    "received_date", "glucose", "hemoglobin", "hematocrit", "white_blood_cell_count", "platelet_count",
+]
+EXPORT_LIMIT = 10000
+# Exported by default: documents whose data is final (accepted automatically or by a reviewer)
+FINAL_STATUSES = [DocumentStatus.AUTO_ACCEPTED, DocumentStatus.HUMAN_APPROVED]
+
+def _final_flag(f: ExtractedField) -> str | None:
+    """H/L for the final (possibly corrected) value against its reference range, else None."""
+    meta = f.validation_metadata or {}
+    if "printed_direction" in meta:
+        return meta["printed_direction"]
+    value, lower, upper = meta.get("value"), meta.get("lower"), meta.get("upper")
+    if value is None:
+        return None
+    return "H" if upper is not None and value > upper else "L" if lower is not None and value < lower else None
+
+def _export_field(f: ExtractedField) -> dict:
+    meta = f.validation_metadata or {}
+    return {
+        "value": f.normalized_value if f.normalized_value not in (None, "") else f.current_value,
+        "unit": meta.get("canonical_unit") or f.unit,
+        "flag": _final_flag(f),
+        "printed_value": f.current_value,
+        "printed_unit": f.unit,
+        "printed_flag": f.abnormal_flag,
+        "reference_range": f.reference_range,
+        "validation_state": f.validation_state,
+        "corrected": bool(f.is_corrected),
+    }
+
+def _csv_cell(value) -> str:
+    text = "" if value is None else str(value)
+    # Spreadsheet formula injection: never let a cell start with a formula character
+    return "'" + text if text[:1] in ("=", "+", "@", "\t", "\r") or (text[:1] == "-" and not _is_number(text)) else text
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+@router.get("/export")
+async def export_documents(
+    request: Request,
+    format: Literal["csv", "json"] = Query("csv"),
+    status: list[DocumentStatus] | None = Query(None, description="Defaults to final documents (auto-accepted or approved)"),
+    q: str | None = Query(None, max_length=200),
+    created_from: datetime | None = Query(None),
+    created_to: datetime | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.OPERATOR])),
+):
+    """
+    Extracted data of matching documents, one row (CSV) or object (JSON) per document, with the
+    reviewed values: corrections applied, results normalized to their canonical units.
+    """
+    statuses = status or FINAL_STATUSES
+    query = (
+        _filtered(statuses, q, created_from, created_to)
+        .order_by(Document.created_at.asc(), Document.id)
+        .limit(EXPORT_LIMIT)
+        .options(selectinload(Document.extractions).selectinload(Extraction.extracted_fields).selectinload(ExtractedField.field_corrections))
+    )
+    docs = (await db.execute(query)).scalars().all()
+
+    records = []
+    for doc in docs:
+        extraction = doc.extractions[0] if doc.extractions else None
+        fields = {f.field_name: f for f in (extraction.extracted_fields if extraction else [])}
+        records.append({
+            "document_id": str(doc.id),
+            "filename": doc.filename,
+            "status": doc.status.value,
+            "uploaded_at": doc.created_at.isoformat() if doc.created_at else None,
+            "extractor": extraction.extractor_type if extraction else None,
+            "overall_confidence": round(extraction.overall_confidence * 100, 1) if extraction and extraction.overall_confidence is not None else None,
+            "fields": {name: _export_field(fields[name]) for name in EXPORT_FIELDS if name in fields},
+        })
+
+    await log_audit_event(
+        db, action="DOCUMENTS_EXPORTED", resource_type=RESOURCE_DOCUMENT, resource_id="export",
+        user_id=current_user.id, correlation_id=getattr(request.state, "correlation_id", None),
+        after_state={"format": format, "count": len(records), "statuses": [s.value for s in statuses],
+                     "q": q, "created_from": created_from.isoformat() if created_from else None,
+                     "created_to": created_to.isoformat() if created_to else None},
+    )
+    await db.commit()
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    headers = {"Content-Disposition": f'attachment; filename="clinextract-export-{stamp}.{format}"',
+               "Cache-Control": "private, no-store"}
+    if format == "json":
+        return Response(content=json.dumps(records, indent=2), media_type="application/json", headers=headers)
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    base = ["document_id", "filename", "status", "uploaded_at", "extractor", "overall_confidence"]
+    columns = base + [f"{name}{suffix}" for name in EXPORT_FIELDS for suffix in ("", "_unit", "_flag", "_reference_range", "_state")]
+    writer.writerow(columns)
+    for r in records:
+        row = [r[c] for c in base]
+        for name in EXPORT_FIELDS:
+            f = r["fields"].get(name, {})
+            row += [f.get("value"), f.get("unit"), f.get("flag"), f.get("reference_range"), f.get("validation_state")]
+        writer.writerow([_csv_cell(v) for v in row])
+    return Response(content=out.getvalue(), media_type="text/csv; charset=utf-8", headers=headers)
+
 @router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
     request: Request,
     file: UploadFile = File(...),
+    allow_duplicate: bool = Query(False, description="Store the file even if an identical one was uploaded before"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.OPERATOR])),
     storage: StorageService = Depends(get_storage_service)
@@ -147,8 +286,23 @@ async def upload_document(
     """
     correlation_id = getattr(request.state, "correlation_id", None)
 
+    file_bytes, mime_type = await storage.read_upload(file)
+    file_size = len(file_bytes)
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
+    if not allow_duplicate:
+        existing = (await db.execute(
+            select(Document).where(Document.content_hash == content_hash).order_by(Document.created_at).limit(1)
+        )).scalar_one_or_none()
+        if existing:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+                "code": "DUPLICATE_DOCUMENT",
+                "message": f"This file was already uploaded as {existing.filename}.",
+                "existing_document_id": str(existing.id),
+                "existing_status": existing.status.value,
+            })
+
     try:
-        storage_key, mime_type, file_size = await storage.store_document(file)
+        storage_key = await storage.store_bytes(file_bytes)
     except HTTPException:
         raise
     except Exception as e:
@@ -164,6 +318,7 @@ async def upload_document(
             uploader_id=current_user.id,
             filename=safe_filename,
             storage_key=storage_key,
+            content_hash=content_hash,
             status=DocumentStatus.UPLOADED
         )
         db.add(new_doc)
@@ -191,23 +346,62 @@ async def upload_document(
 
     await db.refresh(new_doc)
     await db.refresh(new_job)
+    await _enqueue_processing(db, new_doc, new_job, correlation_id)
+    return new_doc
 
-    # Enqueue the Celery task
+async def _enqueue_processing(db: AsyncSession, doc: Document, job: ProcessingJob, correlation_id) -> None:
+    """Hands a committed QUEUED job to the worker; marks both FAILED (and raises 503) if the broker is unreachable."""
     from src.worker.tasks import process_document_job
     try:
-        process_document_job.delay(str(new_job.id), correlation_id)
+        process_document_job.delay(str(job.id), correlation_id)
     except Exception as e:
-        logger.error(f"Failed to enqueue processing job {new_job.id}: {e}")
-        new_job.status = JobStatus.FAILED
-        new_job.error_details = {"error": "Could not enqueue processing job", "step": "enqueue"}
-        new_doc.status = DocumentStatus.FAILED
+        logger.error(f"Failed to enqueue processing job {job.id}: {e}")
+        job.status = JobStatus.FAILED
+        job.error_details = {"error": "Could not enqueue processing job", "step": "enqueue"}
+        doc.status = DocumentStatus.FAILED
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Document stored but processing could not be queued. Please retry later."
         )
 
-    return new_doc
+@router.post("/{document_id}/reprocess", response_model=DocumentResponse)
+async def reprocess_document(
+    document_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.OPERATOR])),
+) -> Any:
+    """
+    Run processing again for a document whose processing failed (e.g. a worker crash, an
+    extractor outage, or a configuration problem that has since been fixed), without re-uploading it.
+    """
+    correlation_id = getattr(request.state, "correlation_id", None)
+    stmt = select(Document).where(Document.id == document_id).with_for_update()
+    doc = (await db.execute(stmt)).scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.status != DocumentStatus.FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Only documents whose processing failed can be reprocessed (status is {doc.status.value})"
+        )
+
+    job = ProcessingJob(document_id=doc.id, status=JobStatus.QUEUED, correlation_id=correlation_id)
+    db.add(job)
+    doc.status = DocumentStatus.UPLOADED
+    await db.flush()
+    await log_audit_event(
+        db, action="DOCUMENT_REPROCESS_REQUESTED", resource_type=RESOURCE_DOCUMENT, resource_id=str(doc.id),
+        user_id=current_user.id, correlation_id=correlation_id,
+        before_state={"status": DocumentStatus.FAILED.value},
+        after_state={"status": DocumentStatus.UPLOADED.value, "job_id": str(job.id)},
+    )
+    await db.commit()
+    await db.refresh(doc)
+    await db.refresh(job)
+    await _enqueue_processing(db, doc, job, correlation_id)
+    return doc
 
 async def _get_document_or_404(db: AsyncSession, document_id: uuid.UUID) -> Document:
     doc = await db.get(Document, document_id)
@@ -297,14 +491,21 @@ async def get_document_page_image(
     storage: StorageService = Depends(get_storage_service)
 ):
     """
-    Render one page of the original document as PNG (1-based page number), in the same
-    coordinate frame as the extracted bounding boxes, for the review viewer.
+    One page of the original document as PNG (1-based page number), in the same coordinate
+    frame as the extracted bounding boxes, for the review viewer. PDF pages are rendered once
+    (during processing, or on first view for older documents) and served from storage.
     """
     doc = await _get_document_or_404(db, document_id)
+    headers = {"Cache-Control": "private, no-store"}
+    try:
+        png = await storage.get_page_image(doc.storage_key, page_number)
+        return Response(content=png, media_type="image/png", headers=headers)
+    except FileNotFoundError:
+        pass
+
     data = await _read_document_bytes(storage, doc)
     kind = filetype.guess(data)
     mime = kind.mime if kind else None
-    headers = {"Cache-Control": "private, no-store"}
 
     if mime in ("image/png", "image/jpeg"):
         if page_number != 1:
@@ -313,6 +514,7 @@ async def get_document_page_image(
 
     if mime == "application/pdf":
         import fitz
+        from src.processing.page_images import render_pdf_page
         try:
             pdf = fitz.open(stream=data, filetype="pdf")
         except Exception:
@@ -320,11 +522,10 @@ async def get_document_page_image(
         try:
             if page_number < 1 or page_number > pdf.page_count:
                 raise HTTPException(status_code=404, detail="Page not found")
-            zoom = PAGE_RENDER_DPI / 72.0
-            pix = pdf[page_number - 1].get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-            png = pix.tobytes("png")
+            png = render_pdf_page(pdf, page_number)
         finally:
             pdf.close()
+        await storage.store_page_image(doc.storage_key, page_number, png)
         return Response(content=png, media_type="image/png", headers=headers)
 
     raise HTTPException(status_code=415, detail="Unsupported document type")
@@ -338,6 +539,13 @@ async def get_document_page_count(
 ):
     """Number of renderable pages for the review viewer."""
     doc = await _get_document_or_404(db, document_id)
+    # The processing artifact already lists the pages; avoid decrypting the whole document
+    try:
+        artifact = json.loads(await storage.backend.get_artifact(storage.artifact_key(doc.storage_key)))
+        if artifact.get("pages"):
+            return {"page_count": len(artifact["pages"])}
+    except (FileNotFoundError, ValueError):
+        pass
     data = await _read_document_bytes(storage, doc)
     kind = filetype.guess(data)
     if kind and kind.mime == "application/pdf":

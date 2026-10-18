@@ -39,6 +39,27 @@ class StorageBackend(ABC):
         pass
 
     @abstractmethod
+    async def upload_binary_artifact(self, key: str, data: bytes) -> str:
+        """
+        Stores a derived binary file (e.g. a rendered page image) next to the artifacts.
+        """
+        pass
+
+    @abstractmethod
+    async def get_binary_artifact(self, key: str) -> bytes:
+        """
+        Retrieves a file stored with upload_binary_artifact; raises FileNotFoundError if absent.
+        """
+        pass
+
+    @abstractmethod
+    async def delete_artifacts_with_prefix(self, prefix: str) -> int:
+        """
+        Deletes every artifact whose key starts with `prefix`; returns how many were removed.
+        """
+        pass
+
+    @abstractmethod
     async def delete_file(self, key: str) -> bool:
         """
         Deletes a file from the storage backend.

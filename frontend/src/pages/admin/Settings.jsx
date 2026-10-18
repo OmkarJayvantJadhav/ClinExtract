@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { fetchApi } from '@/services/apiClient';
+import { useDemoInfo, isDemoUser } from '@/lib/demo';
 
 function ReadOnlyRow({ label, value, help }) {
   return (
@@ -93,7 +94,7 @@ function ThresholdsCard({ thresholds, editable }) {
 
   const rows = [
     ['auto_accept', 'Auto-accept threshold', 'Overall confidence at or above this (with every field valid) is accepted without review.'],
-    ['review_recommended', 'Review recommended below', 'Fields below this confidence are flagged "review recommended".'],
+    ['review_recommended', 'Review recommended below', 'Lab results and patient identifiers (name, ID, birth date) below this confidence send the document to review; other fields are only flagged.'],
     ['low_confidence', 'Low confidence below', 'Fields below this confidence always route the document to human review.'],
   ];
 
@@ -128,10 +129,56 @@ function ThresholdsCard({ thresholds, editable }) {
   );
 }
 
+function ReviewPolicyCard({ policy, editable }) {
+  const queryClient = useQueryClient();
+  const [reviewAbnormal, setReviewAbnormal] = useState(policy.review_abnormal_results);
+  const [saved, setSaved] = useState(false);
+  const mutation = useMutation({
+    mutationFn: () => fetchApi('/settings/review-policy', {
+      method: 'PUT',
+      body: JSON.stringify({ review_abnormal_results: reviewAbnormal }),
+    }),
+    onSuccess: () => {
+      setSaved(true);
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Review Policy</CardTitle>
+        <CardDescription>
+          {editable ? 'Changes apply to documents processed afterwards.' : 'Only administrators can change this.'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <Label htmlFor="review-abnormal" className="text-sm font-medium">Hold abnormal results for review</Label>
+            <p className="text-xs text-muted-foreground">
+              Off: results outside the reference range are flagged on the record but do not stop auto-acceptance.
+              Values far outside any plausible result (a likely misread) always go to review.
+            </p>
+          </div>
+          <input id="review-abnormal" type="checkbox" className="mt-1 h-4 w-4 accent-primary" disabled={!editable}
+            checked={reviewAbnormal} onChange={e => { setSaved(false); setReviewAbnormal(e.target.checked); }} />
+        </div>
+        {mutation.isError && <p className="text-sm text-destructive">{mutation.error.message}</p>}
+        {saved && <p className="text-sm text-success">Review policy saved.</p>}
+        {editable && <Button className="w-fit" onClick={() => mutation.mutate()} disabled={mutation.isPending}>Save policy</Button>}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function Settings() {
   const { user, hasRole, logout } = useAuth();
   const navigate = useNavigate();
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: () => fetchApi('/settings') });
+  const { data: demo } = useDemoInfo();
+  // Shared demo accounts cannot change their password or sign out other visitors
+  const sharedAccount = isDemoUser(demo, user);
 
   const logoutAll = useMutation({
     mutationFn: () => fetchApi('/auth/logout-all', { method: 'POST' }),
@@ -166,22 +213,35 @@ export function Settings() {
               <ReadOnlyRow label="Password last changed" value={user?.password_changed_at ? new Date(user.password_changed_at).toLocaleDateString() : '—'} />
             </CardContent>
           </Card>
-          <ChangePasswordCard minLength={settings?.password_min_length} />
-          <Card>
-            <CardHeader>
-              <CardTitle>Sessions</CardTitle>
-              <CardDescription>Sign out of ClinExtract on every device, including this one.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button variant="outline" onClick={() => logoutAll.mutate()} disabled={logoutAll.isPending}>Sign out everywhere</Button>
-              {logoutAll.isError && <p className="mt-2 text-sm text-destructive">{logoutAll.error.message}</p>}
-            </CardContent>
-          </Card>
+          {sharedAccount ? (
+            <p className="text-sm text-muted-foreground">
+              This is a shared demo account, so its password and sessions cannot be changed.
+            </p>
+          ) : (
+            <>
+              <ChangePasswordCard minLength={settings?.password_min_length} />
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sessions</CardTitle>
+                  <CardDescription>Sign out of ClinExtract on every device, including this one.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button variant="outline" onClick={() => logoutAll.mutate()} disabled={logoutAll.isPending}>Sign out everywhere</Button>
+                  {logoutAll.isError && <p className="mt-2 text-sm text-destructive">{logoutAll.error.message}</p>}
+                </CardContent>
+              </Card>
+            </>
+          )}
         </TabsContent>
 
-        <TabsContent value="confidence" className="mt-6">
+        <TabsContent value="confidence" className="mt-6 grid gap-6">
           {settings
-            ? <ThresholdsCard key={JSON.stringify(settings.confidence_thresholds)} thresholds={settings.confidence_thresholds} editable={hasRole('ADMIN')} />
+            ? <>
+                <ThresholdsCard key={JSON.stringify(settings.confidence_thresholds)} thresholds={settings.confidence_thresholds} editable={hasRole('ADMIN')} />
+                {settings.review_policy && (
+                  <ReviewPolicyCard key={JSON.stringify(settings.review_policy)} policy={settings.review_policy} editable={hasRole('ADMIN')} />
+                )}
+              </>
             : <p className="text-sm text-muted-foreground">Loading…</p>}
         </TabsContent>
 

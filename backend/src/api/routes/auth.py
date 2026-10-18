@@ -8,8 +8,8 @@ from sqlalchemy import select
 
 from src.core.config import settings
 from src.core.database import get_db
-from src.core.rate_limit import SlidingWindowLimiter
-from src.db.models.user import User
+from src.core.rate_limit import DatabaseRateLimiter
+from src.db.models.user import User, UserRole
 from src.schemas.auth import UserLogin, UserResponse, PasswordChangeRequest
 from src.utils.security import (
     verify_password, create_access_token, burn_password_check, password_policy_error, get_password_hash,
@@ -20,7 +20,7 @@ from src.services.audit import log_audit_event
 router = APIRouter()
 
 RESOURCE_USER = "User"
-login_limiter = SlidingWindowLimiter(settings.LOGIN_RATE_LIMIT_PER_MINUTE, 60.0)
+login_limiter = DatabaseRateLimiter(settings.LOGIN_RATE_LIMIT_PER_MINUTE, 60.0)
 
 def _client_ip(request: Request) -> str:
     # Behind the bundled reverse proxy the real client address is in X-Real-IP (set by Caddy,
@@ -30,6 +30,14 @@ def _client_ip(request: Request) -> str:
         if real_ip:
             return real_ip.strip()
     return request.client.host if request.client else "unknown"
+
+def is_demo_account(user: User) -> bool:
+    """Publicly shared demo account (never an admin, whatever DEMO_ACCOUNTS says)."""
+    return user.username in settings.demo_usernames and user.role != UserRole.ADMIN
+
+def _refuse_for_demo(user: User) -> None:
+    if is_demo_account(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not available for shared demo accounts")
 
 def set_auth_cookies(response: Response, user: User) -> None:
     access_token = create_access_token(subject=str(user.id), role=user.role.value, token_version=user.token_version or 0)
@@ -57,7 +65,7 @@ async def login(
     db: AsyncSession = Depends(get_db)
 ) -> Any:
     ip = _client_ip(request)
-    if not login_limiter.allow(ip):
+    if not await login_limiter.allow(db, ip):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts. Try again in a minute.")
 
     stmt = select(User).where(User.username == login_data.username).with_for_update()
@@ -68,15 +76,17 @@ async def login(
         burn_password_check(login_data.password)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
 
-    if user.locked_until and user.locked_until > now:
+    demo = is_demo_account(user)
+    if user.locked_until and user.locked_until > now and not demo:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Account temporarily locked after repeated failed logins. Try again later or contact an administrator.",
         )
 
     if not verify_password(login_data.password, user.password_hash):
-        user.failed_login_count = (user.failed_login_count or 0) + 1
-        locked = user.failed_login_count >= settings.LOGIN_MAX_FAILED_ATTEMPTS
+        # A shared demo account is never locked: anyone could otherwise lock everyone out.
+        user.failed_login_count = 0 if demo else (user.failed_login_count or 0) + 1
+        locked = not demo and user.failed_login_count >= settings.LOGIN_MAX_FAILED_ATTEMPTS
         if locked:
             user.locked_until = now + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
             user.failed_login_count = 0
@@ -112,6 +122,7 @@ async def logout_everywhere(
     db: AsyncSession = Depends(get_db),
 ):
     """Revoke every session of the current user, on all devices."""
+    _refuse_for_demo(current_user)
     current_user.token_version = (current_user.token_version or 0) + 1
     await log_audit_event(db, action="USER_SESSIONS_REVOKED", resource_type=RESOURCE_USER, resource_id=str(current_user.id), user_id=current_user.id)
     await db.commit()
@@ -125,6 +136,7 @@ async def change_password(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    _refuse_for_demo(current_user)
     if not verify_password(body.current_password, current_user.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
     if body.new_password == body.current_password:
@@ -149,3 +161,19 @@ async def read_users_me(
 ) -> Any:
     """Get current logged in user"""
     return current_user
+
+@router.get("/demo")
+async def demo_accounts(db: AsyncSession = Depends(get_db)) -> Any:
+    """Public: the shared demo accounts offered on the sign-in page (only on demo deployments)."""
+    names = settings.demo_usernames
+    if not names:
+        return {"enabled": False, "accounts": []}
+    stmt = select(User).where(User.username.in_(names), User.is_active.is_(True), User.role != UserRole.ADMIN)
+    users = (await db.execute(stmt)).scalars().all()
+    role_order = [UserRole.OPERATOR, UserRole.REVIEWER, UserRole.VIEWER]
+    users = sorted(users, key=lambda u: (role_order.index(u.role) if u.role in role_order else 99, u.username))
+    return {
+        "enabled": bool(users),
+        "accounts": [{"username": u.username, "role": u.role.value} for u in users],
+        "password": settings.DEMO_PASSWORD if users else None,
+    }

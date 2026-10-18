@@ -33,7 +33,8 @@ Human Review (React Dashboard)
 - **Asynchronous Pipeline:** Robust Celery-driven OCR and data extraction.
 - **Hybrid Extraction Engine:** Toggle between a deterministic Rule-Based provider and AI-assisted Gemini provider.
 - **Validation Rules:** Configurable reference ranges and data type validation.
-- **Human-in-the-Loop Review:** Interactive workspace to visualize document bounds, correct extracted fields, and approve or reject documents.
+- **Human-in-the-Loop Review:** Interactive workspace to visualize document bounds, correct extracted fields, and approve or reject documents. Possible misreads are reviewed first; keyboard shortcuts (j/k move, n next issue, e edit, a approve, r reject) and moving straight to the next document keep reviewing fast.
+- **Batch Upload and Export:** several files per upload with real progress, duplicate files refused, and CSV/JSON export of the reviewed results.
 - **Security & Provenance:** RBAC, CSRF protection, and immutable audit logs.
 
 ## Project Structure
@@ -87,6 +88,16 @@ EXTRACTION_FALLBACK_ENABLED=true   # fall back to the rule-based extractor if Ge
 
 > **Patient data:** the Gemini extractors send document content to Google. Only enable them
 > under an appropriate data-processing agreement (e.g. a HIPAA BAA) for your deployment.
+
+Other settings:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATE_ORDER` | `MDY` | How to read dates like 03/04/2025: `MDY` (March 4) or `DMY` (3 April) |
+| `OCR_WORKERS` | CPUs, up to 4 | Pages of one document OCR'd in parallel |
+| `STUCK_JOB_MINUTES` | `15` | A queued job idle this long is sent to the worker again (checked every 10 minutes) |
+| `DOCUMENT_RETENTION_DAYS` | `0` (off) | Purge finished documents after this many days |
+| `DEMO_ACCOUNTS`, `DEMO_PASSWORD` | off | Shared one-click demo accounts on the sign-in page |
 
 Put these in a `.env` file next to `docker-compose.yml`. For any deployment beyond your own
 machine also set `JWT_SECRET` (the API refuses to start with `APP_ENV=production` and the
@@ -186,6 +197,13 @@ cp .env.production.example .env.production   # fill in every value
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 docker compose -f docker-compose.prod.yml --env-file .env.production exec backend python scripts/seed_users.py
 ```
+**Free public demo:** one command (`sudo bash scripts/setup-server.sh`) runs this stack on a
+single Ubuntu server: an AWS t4g.small on the free plan ([docs/DEPLOY_AWS.md](docs/DEPLOY_AWS.md))
+or an Oracle Cloud Always Free VM ([docs/DEPLOY_FREE_ORACLE.md](docs/DEPLOY_FREE_ORACLE.md)), including a
+free HTTPS hostname, shared demo accounts with one-click sign-in (`DEMO_ACCOUNTS`,
+`DEMO_PASSWORD`) and downloadable synthetic sample reports
+(`backend/scripts/make_sample_reports.py`).
+
 Point a DNS record for `SITE_ADDRESS` at the host and open ports 80/443; Caddy obtains and
 renews the TLS certificate. The API refuses to start in production without a strong
 `JWT_SECRET` and a `DOCUMENT_ENCRYPTION_KEY`. Seeding refuses the default dev passwords there,
@@ -212,6 +230,8 @@ access-controlled storage. Stored files stay encrypted inside the archive, so ke
   by status, oldest pending review, dependency up/down). Requires
   `Authorization: Bearer $METRICS_TOKEN`; the public web server blocks it, so scrape
   `backend:8000` from inside the Docker network.
+- Jobs whose message was lost (a broker restart, a killed worker) are re-sent automatically every
+  10 minutes; failed documents can be retried from their page.
 - Suggested alerts: `clinextract_dependency_up == 0`, a rising
   `clinextract_processing_jobs{status="FAILED"}`, and
   `clinextract_oldest_pending_review_age_seconds` above your review SLA.
@@ -222,7 +242,8 @@ access-controlled storage. Stored files stay encrypted inside the archive, so ke
   Changing a password, changing a role, deactivating an account or "sign out everywhere" revokes
   existing sessions immediately.
 - **Brute-force protection:** accounts lock for `LOGIN_LOCKOUT_MINUTES` after
-  `LOGIN_MAX_FAILED_ATTEMPTS` failures, and login attempts are rate-limited per client IP. Failed
+  `LOGIN_MAX_FAILED_ATTEMPTS` failures, and login attempts are rate-limited per client IP across all
+  API processes (counted in the database). Failed
   logins and lockouts are audited.
 - **Passwords:** Argon2 hashing, with a policy of at least 12 characters mixing three character classes.
   Users change their own password in Settings; admins create users, change roles,
@@ -249,17 +270,60 @@ also requires organizational measures such as agreements, policies and risk asse
 
 ## Clinical Validation
 
-- Reference ranges are adult ranges, sex-specific where they differ (hemoglobin, hematocrit), using
-  the extracted patient sex. For patients under 18, no adult range is applied and the value is
-  routed to human review.
+- Each result is checked against the reference range printed next to it on the report (and its
+  H/L flag) when there is one, since that range fits the patient and the lab's method. Otherwise
+  built-in adult ranges apply, sex-specific where they differ (hemoglobin, hematocrit); for
+  patients under 18 without a printed range the value is routed to human review.
+- On reports that print H/L flags, a value whose flag disagrees with the reading (e.g. read as
+  high but not flagged) is `FLAG_MISMATCH` and goes to review: it is usually a misread.
+- Numeric dates such as 03/04/2025 are read month first unless `DATE_ORDER=DMY`; month-name
+  dates (14-Mar-1985) are understood.
 - Units are captured and converted (for example glucose in mmol/L, hemoglobin in g/L, cell counts in /µL).
-- Every extracted value is checked against the document's own text. Values that do not appear on
-  the page (a risk with AI extractors) are flagged `SOURCE_MISMATCH`.
+- Every extracted value is checked against the document's own text, as whole words, and lab results
+  must follow their own label. Values that do not appear on the page that way (a risk with AI
+  extractors) are flagged `SOURCE_MISMATCH`.
 - The rule-based extractor understands common label variants (MRN, Hgb/Hb, Hct, WBC, PLT,
   "Collected", "Sample", several date formats). Unusual layouts are best handled by the Gemini
   extractors with review.
-- Only missing, malformed or impossible values block approval. Abnormal results must be explicitly
-  confirmed by the reviewer.
+- Results outside the reference range are flagged on the record but do not by themselves send a
+  cleanly extracted document to review. Admins can change this in Settings → Thresholds →
+  Review Policy ("Hold abnormal results for review").
+- Values far outside anything a lab would report (for example hemoglobin 1.45 g/dL), or more than
+  4x outside the reference range, usually a misread decimal point, are flagged `EXTREME_VALUE` and
+  always go to review. So do names on scanned pages that look misread (`POSSIBLE_MISREAD`, e.g.
+  "lyer" for "Iyer"), and lab results or patient identifiers read with less than high confidence.
+- On text PDFs, large embedded images (results pasted or scanned under a typed header) are OCR'd
+  as well, so their values are not missed.
+- Only missing, malformed or impossible values block approval. Abnormal and extreme results that
+  reach review must be explicitly confirmed by the reviewer.
+- Documents whose processing failed can be retried from the document page (admins and operators),
+  without re-uploading.
+
+## Measured Accuracy
+
+`backend/scripts/evaluate_extraction.py` generates labeled synthetic lab reports that vary the
+layout (table, `Label: value`, abbreviations), label wording, date formats (ISO, US, `14-Mar-1985`),
+units (mg/dL or mmol/L, g/dL or g/L, K/uL or 10^9/L), sex-specific ranges, H/L flags and media
+(digital PDF, noisy rotated scan, typed header with a pasted results table), runs them through
+the real pipeline with the rule-based extractor, and scores every field.
+
+| Set | Field accuracy | Documents auto-accepted | Auto-accepted and fully correct |
+|---|---|---|---|
+| 60 reports, seed 0 | 99.3% | 70.0% | 100% |
+| 90 reports, seed 7 | 99.7% | 73.3% | 100% |
+| 60 reports, seed 21 | 98.9% | 68.3% | 100% |
+
+The remaining errors are OCR misreads on scans (a dropped decimal point, a wrong digit, I/l in a
+name); each was caught by a check and sent to review rather than auto-accepted. CI runs a smaller
+set (`tests/test_extraction_accuracy.py`) and fails if accuracy drops or a wrong document would be
+auto-accepted. These are synthetic documents: measure on your own (de-identified) reports before
+relying on the numbers.
+
+To measure the Gemini extractors on the same generated reports (synthetic data, so nothing
+patient-related leaves your machine):
+```bash
+GEMINI_API_KEY=... python scripts/evaluate_extraction.py --extractor llm --count 12   # or vlm
+```
 
 ## AI Provider
 

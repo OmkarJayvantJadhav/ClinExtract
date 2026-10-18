@@ -1,7 +1,9 @@
 import re
 from datetime import datetime, date, timezone
 from typing import Dict, Tuple, Optional
-from src.validation.reference_ranges import UNIT_CONVERSIONS, RAW_COUNT_THRESHOLD, canonical_unit, get_reference_range
+from src.validation.reference_ranges import (
+    UNIT_CONVERSIONS, RAW_COUNT_THRESHOLD, PLAUSIBLE_LIMITS, canonical_unit, get_reference_range,
+)
 
 COUNT_FIELDS = {"white_blood_cell_count", "platelet_count"}
 
@@ -11,16 +13,34 @@ def normalize_text(val: str) -> str:
     # Trim and normalize whitespace
     return re.sub(r'\s+', ' ', val.strip())
 
+_MDY_FORMATS = ("%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y")
+# 14-Mar-1985, 14 Mar 1985, 14 March 1985, Mar 14, 1985, March 14 1985
+_MONTH_NAME_FORMATS = ("%d-%b-%Y", "%d %b %Y", "%d %B %Y", "%d-%B-%Y", "%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y")
+_DMY_FORMATS = ("%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y")
+
+def date_order() -> str:
+    from src.core.config import settings
+    return "DMY" if str(settings.DATE_ORDER).upper() == "DMY" else "MDY"
+
 def parse_date(val: str) -> Optional[date]:
+    """
+    ISO first; then numeric day/month dates in the configured DATE_ORDER, falling back to the
+    other order only when the value cannot be read that way (e.g. a day above 12). Dotted dates
+    (31.12.2024) are always day first.
+    """
     val = normalize_text(val)
-    # ISO first, then US MM/DD/YYYY, then DD/MM/YYYY (only reachable when the day is > 12,
-    # i.e. the value cannot be a valid US date).
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y", "%d.%m.%Y"):
+    numeric = _DMY_FORMATS if date_order() == "DMY" else _MDY_FORMATS
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", *numeric, "%d.%m.%Y", *_MONTH_NAME_FORMATS):
         try:
             return datetime.strptime(val, fmt).date()
         except ValueError:
             continue
     return None
+
+def is_ambiguous_date(val: str) -> bool:
+    """True for numeric dates like 03/04/2025 that are valid both day-first and month-first."""
+    m = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})[/-]\d{4}", normalize_text(val or ""))
+    return bool(m) and m.group(1) != m.group(2) and int(m.group(1)) <= 12 and int(m.group(2)) <= 12
 
 def normalize_date(val: str) -> Optional[str]:
     parsed = parse_date(val)
@@ -58,9 +78,46 @@ def _format_number(num: float) -> str:
     num = round(num, 3)
     return str(int(num)) if float(num).is_integer() else str(num)
 
+_RANGE_PAIR = re.compile(r"(-?[\d,]*\.?\d+)\s*(?:-|\u2013|to)\s*(-?[\d,]*\.?\d+)", re.IGNORECASE)
+_RANGE_BOUND = re.compile(r"(<=?|>=?|\u2264|\u2265)\s*([\d,]*\.?\d+)")
+
+def parse_printed_range(text: Optional[str]) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    """(lower, upper) from a printed range such as "70 - 100", "<200" or ">= 60"; None if unreadable."""
+    if not text:
+        return None
+    pair = _RANGE_PAIR.search(text)
+    if pair:
+        lower, upper = (float(n.replace(",", "")) for n in pair.groups())
+        return (lower, upper) if lower <= upper else None
+    bound = _RANGE_BOUND.search(text)
+    if bound:
+        op, number = bound.groups()
+        limit = float(number.replace(",", ""))
+        return (None, limit) if op in ("<", "<=", "\u2264") else (limit, None)
+    return None
+
+# Values beyond this multiple of the range's upper limit (or below its lower limit divided by
+# it) are treated as a likely misread rather than a plain abnormal result.
+FAR_OUTSIDE_FACTOR = 4.0
+
+def normalize_flag(flag: Optional[str]) -> Optional[str]:
+    """"H"/"L" for a printed high/low flag (HH/LL/High/Low included), else None."""
+    f = (flag or "").strip().upper()
+    if f in ("H", "HH", "HIGH"):
+        return "H"
+    if f in ("L", "LL", "LOW"):
+        return "L"
+    return None
+
 def validate_numeric_and_range(
-    field_name: str, val: str, unit: Optional[str] = None, sex: Optional[str] = None, age: Optional[int] = None
+    field_name: str, val: str, unit: Optional[str] = None, sex: Optional[str] = None, age: Optional[int] = None,
+    printed_range: Optional[str] = None, printed_flag: Optional[str] = None,
 ) -> Tuple[str, Optional[str], Optional[Dict]]:
+    """
+    Normalizes the value to the analyte's canonical unit and checks it against a reference range:
+    the report's own printed range when there is one (it already fits the patient and the lab's
+    method), otherwise the built-in adult range. A printed H/L flag also marks the value abnormal.
+    """
     num = normalize_numeric(val)
     if num is None:
         return "INVALID_FORMAT", None, None
@@ -69,6 +126,8 @@ def validate_numeric_and_range(
     meta: Dict = {}
     conversions = UNIT_CONVERSIONS.get(field_name, {})
     norm_unit = normalize_unit(unit)
+    # Multiplier taking the printed value (and its printed range, same row) to the canonical unit
+    scale = 1.0
 
     if norm_unit:
         factor = conversions.get(norm_unit)
@@ -80,22 +139,46 @@ def validate_numeric_and_range(
             meta["original_value"] = num
             meta["original_unit"] = unit
             num = num * factor
+            scale = factor
     elif field_name in COUNT_FIELDS and num >= RAW_COUNT_THRESHOLD:
         meta["original_value"] = num
         meta["assumed_unit"] = "cells/uL"
         num = num / 1000.0
+        scale = 0.001
 
     norm_str = _format_number(num)
 
     if expected_unit:
         meta["canonical_unit"] = expected_unit
-        ref = get_reference_range(field_name, sex, age)
-        if ref is None:
-            meta["reason"] = f"no adult reference range applies (age {age})"
-            return "NO_REFERENCE_RANGE", norm_str, meta
-        lower, upper, basis = ref
+        limits = PLAUSIBLE_LIMITS.get(field_name)
+        if limits and not (limits[0] <= num <= limits[1]):
+            meta.update({"value": round(num, 3), "plausible_lower": limits[0], "plausible_upper": limits[1]})
+            return "EXTREME_VALUE", norm_str, meta
+        printed = parse_printed_range(printed_range)
+        if printed:
+            lower, upper = (None if b is None else round(b * scale, 3) for b in printed)
+            basis = "report"
+            meta["printed_range"] = printed_range
+            # Which side of the printed range the value falls on; checked against the report's
+            # own H/L flags by the validation engine.
+            meta["printed_direction"] = "H" if upper is not None and num > upper else "L" if lower is not None and num < lower else None
+        else:
+            ref = get_reference_range(field_name, sex, age)
+            if ref is None:
+                meta["reason"] = f"no adult reference range applies (age {age})"
+                return "NO_REFERENCE_RANGE", norm_str, meta
+            lower, upper, basis = ref
         meta["range_basis"] = basis
-        if num < lower or num > upper:
+
+        outside = (lower is not None and num < lower) or (upper is not None and num > upper)
+        if (upper and num > FAR_OUTSIDE_FACTOR * upper) or (lower and num < lower / FAR_OUTSIDE_FACTOR):
+            # A misplaced decimal point moves a value tenfold; a human should look at this one.
+            meta.update({"value": round(num, 3), "lower": lower, "upper": upper, "reason": "far_outside_range"})
+            return "EXTREME_VALUE", norm_str, meta
+        flag = normalize_flag(printed_flag)
+        if flag:
+            meta["printed_flag"] = flag
+        if outside or flag:
             meta.update({"value": round(num, 3), "lower": lower, "upper": upper})
             return "OUTSIDE_REFERENCE_RANGE", norm_str, meta
 
@@ -141,13 +224,56 @@ def check_date_consistency(dates: Dict[str, Optional[str]]) -> Dict[str, str]:
         problems["received_date"] = "Received date is before collection date"
     return problems
 
-def validate_source_agreement(extracted: str, source_text: str) -> bool:
+def name_looks_misread(name: Optional[str]) -> bool:
     """
-    True when the extracted value appears in the source text, ignoring case, whitespace and
-    punctuation (so "250,000" matches "250000" and "O'Brien" matches "OBrien"). Used to catch
-    values an AI extractor produced that are not actually printed on the page.
+    OCR tells: a digit in a name ("J0hn"), or a word starting lowercase in an otherwise
+    capitalized name ("Neil lyer" for "Neil Iyer", the classic I/l confusion).
+    """
+    words = [w for w in re.split(r"[\s,]+", name or "") if w]
+    if any(ch.isdigit() for w in words for ch in w):
+        return True
+    starts = [w[0] for w in words if w[0].isalpha()]
+    return any(c.islower() for c in starts) and any(c.isupper() for c in starts)
+
+# Words that label each lab result on a report (compared without case or punctuation)
+RESULT_LABELS = {
+    "glucose": {"glucose", "glu"},
+    "hemoglobin": {"hemoglobin", "haemoglobin", "hgb", "hb"},
+    "hematocrit": {"hematocrit", "haematocrit", "hct"},
+    "white_blood_cell_count": {"white", "wbc", "leukocyte", "leukocytes", "leucocytes"},
+    "platelet_count": {"platelet", "platelets", "plt"},
+}
+# A result must be within this many words after its label
+LABEL_WINDOW = 12
+
+def validate_source_agreement(extracted: str, source_text: str, field_name: Optional[str] = None) -> bool:
+    """
+    True when the extracted value is printed on the page: as whole words (so "90" does not match
+    inside "1990"), ignoring case and punctuation ("250,000" matches "250000", "O'Brien" matches
+    "OBRIEN"). Lab results must also follow their own label (e.g. "Hgb") within a few words, so a
+    number that merely appears somewhere else on the page does not count. Used to catch values
+    an AI extractor produced that are not actually on the page.
     """
     value = _squash(extracted)
     if not value:
         return True
-    return value in _squash(source_text)
+    tokens = [_squash(t) for t in (source_text or "").split()]
+    tokens = [t for t in tokens if t]
+    labels = RESULT_LABELS.get(field_name or "")
+
+    for start in range(len(tokens)):
+        joined = ""
+        for end in range(start, len(tokens)):
+            joined += tokens[end]
+            glued_unit = value.isdigit() and end == start and joined.startswith(value) and _unit_suffix(joined[len(value):])
+            if joined == value or glued_unit:
+                if not labels or any(t in labels for t in tokens[max(0, start - LABEL_WINDOW):start]):
+                    return True
+                break
+            if not value.startswith(joined):
+                break
+    return False
+
+def _unit_suffix(rest: str) -> bool:
+    """A value printed glued to its unit or flag, e.g. "92mg/dL" or "182H"."""
+    return bool(re.fullmatch(r"[a-z%]+[a-z0-9]*", rest))

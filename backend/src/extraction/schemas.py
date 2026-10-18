@@ -1,7 +1,7 @@
 from pydantic import BaseModel, field_validator
 from typing import List, Optional
 
-CLINICAL_EXTRACTION_PROMPT_VERSION = "v1.1"
+CLINICAL_EXTRACTION_PROMPT_VERSION = "v1.2"
 
 # The exact field names the validation engine expects. AI prompts must request these
 # names verbatim, otherwise every field is reported as MISSING.
@@ -28,13 +28,19 @@ def build_field_instructions() -> str:
         + "\nFor each field: `value` is the text exactly as it appears (null if absent), "
         "`unit` is the printed unit or null, `confidence` is your confidence from 0 to 100, "
         "`page_num` is the 1-based page number, and `bbox_normalized` is null unless the "
-        "location is known precisely as [x, y, width, height] fractions of the page."
+        "location is known precisely as [x, y, width, height] fractions of the page. "
+        "For lab results also set `reference_range` to the range printed for that result on the "
+        "report (e.g. \"70 - 100\" or \"<200\"), and `abnormal_flag` to the printed flag (H, L, HH "
+        "or LL); leave either null when the report does not print it."
     )
 
 class ExtractedFieldData(BaseModel):
     field_name: str
     value: Optional[str] = None
     unit: Optional[str] = None
+    # As printed on the report next to the result, e.g. "70 - 100" and "H"
+    reference_range: Optional[str] = None
+    abnormal_flag: Optional[str] = None
     confidence: Optional[float] = None
     page_num: Optional[int] = None
     bbox_normalized: Optional[List[float]] = None

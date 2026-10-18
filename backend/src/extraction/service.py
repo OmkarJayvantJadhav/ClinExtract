@@ -54,6 +54,8 @@ class ExtractionService:
                 field_name=field.field_name,
                 value=field.value,
                 unit=field.unit,
+                reference_range=field.reference_range,
+                abnormal_flag=field.abnormal_flag,
                 confidence=field.confidence,
                 is_valid=True,
                 page_num=field.page_num,

@@ -26,8 +26,13 @@ class Settings(BaseSettings):
     # A job left RUNNING longer than this (e.g. the worker died) is considered abandoned
     # and may be picked up again when the broker redelivers it.
     JOB_STALE_AFTER_MINUTES: int = 15
+    # A QUEUED or RETRYING job with no progress for this long is sent to the worker again
+    # (its message was lost, e.g. a broker restart). Checked every 10 minutes.
+    STUCK_JOB_MINUTES: int = 15
     # Upper bound on pages processed per document (protects the worker from huge PDFs).
     MAX_DOCUMENT_PAGES: int = 50
+    # Pages OCR'd at the same time within one document; 0 = number of CPUs (at most 4)
+    OCR_WORKERS: int = 0
 
     # --- Compliance ---
     # Fernet key used to encrypt stored documents and OCR artifacts at rest.
@@ -46,7 +51,7 @@ class Settings(BaseSettings):
     # --- Authentication hardening ---
     LOGIN_MAX_FAILED_ATTEMPTS: int = 5
     LOGIN_LOCKOUT_MINUTES: int = 15
-    # Per-client-IP login attempts allowed per minute (per API process)
+    # Per-client-IP login attempts allowed per minute (shared by all API processes)
     LOGIN_RATE_LIMIT_PER_MINUTE: int = 20
     PASSWORD_MIN_LENGTH: int = 12
     # Mark cookies Secure. Defaults to True in production; set explicitly when serving over HTTPS elsewhere.
@@ -58,6 +63,18 @@ class Settings(BaseSettings):
     # Bearer token for GET /api/v1/health/metrics. Without it the endpoint is open in
     # development and disabled in production.
     METRICS_TOKEN: str | None = None
+
+    # --- Public demo ---
+    # Comma-separated non-admin usernames to share publicly on a demo deployment, e.g.
+    # "operator,reviewer". With DEMO_PASSWORD set they are offered on the sign-in page, cannot
+    # change their password or sign out other sessions, and are not locked by failed logins
+    # (per-IP login rate limiting still applies). Use synthetic documents only.
+    DEMO_ACCOUNTS: str = ""
+    DEMO_PASSWORD: str | None = None
+
+    # How to read numeric dates such as 03/04/2025 that are valid either way: "MDY" (US,
+    # March 4) or "DMY" (most other countries, 3 April). ISO dates (2025-04-03) are unaffected.
+    DATE_ORDER: str = "MDY"
 
     # Extraction configuration
     EXTRACTION_PROVIDER: str = "rule_based"
@@ -87,6 +104,12 @@ class Settings(BaseSettings):
             if not self.DOCUMENT_ENCRYPTION_KEY:
                 raise ValueError("DOCUMENT_ENCRYPTION_KEY must be set when APP_ENV=production")
         return self
+
+    @property
+    def demo_usernames(self) -> set[str]:
+        if not self.DEMO_PASSWORD:
+            return set()
+        return {name.strip() for name in self.DEMO_ACCOUNTS.split(",") if name.strip()}
 
     @property
     def cookie_secure(self) -> bool:

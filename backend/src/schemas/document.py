@@ -9,6 +9,8 @@ class ExtractedFieldResponse(BaseModel):
     field_name: str
     value: Optional[str]
     unit: Optional[str] = None
+    reference_range: Optional[str] = None
+    abnormal_flag: Optional[str] = None
     original_value: Optional[str] = None
     current_value: Optional[str] = None
     is_corrected: bool = False
@@ -68,6 +70,8 @@ class DocumentListItem(DocumentResponse):
     overall_confidence: Optional[float] = None  # percentage
     patient_name: Optional[str] = None
     patient_id: Optional[str] = None
+    # A result that may be misread or critical (EXTREME_VALUE, FLAG_MISMATCH, POSSIBLE_MISREAD)
+    needs_attention: bool = False
 
 class DocumentDetailResponse(DocumentResponse):
     extractions: List[ExtractionResponse] = []
