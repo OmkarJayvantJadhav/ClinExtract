@@ -88,6 +88,9 @@ DEMO_ACCOUNTS=operator,reviewer,viewer
 DEMO_PASSWORD=Demo-$(openssl rand -hex 6)
 ADMIN_SEED_PASSWORD=Adm1n-$(openssl rand -hex 12)
 
+# How to read dates like 03/04/2025: MDY (US: March 4) or DMY (3 April)
+DATE_ORDER=MDY
+
 # Processes (raise on a bigger machine)
 API_WORKERS=$processes
 WORKER_CONCURRENCY=$processes

@@ -13,16 +13,32 @@ def normalize_text(val: str) -> str:
     # Trim and normalize whitespace
     return re.sub(r'\s+', ' ', val.strip())
 
+_MDY_FORMATS = ("%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y")
+_DMY_FORMATS = ("%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y")
+
+def date_order() -> str:
+    from src.core.config import settings
+    return "DMY" if str(settings.DATE_ORDER).upper() == "DMY" else "MDY"
+
 def parse_date(val: str) -> Optional[date]:
+    """
+    ISO first; then numeric day/month dates in the configured DATE_ORDER, falling back to the
+    other order only when the value cannot be read that way (e.g. a day above 12). Dotted dates
+    (31.12.2024) are always day first.
+    """
     val = normalize_text(val)
-    # ISO first, then US MM/DD/YYYY, then DD/MM/YYYY (only reachable when the day is > 12,
-    # i.e. the value cannot be a valid US date).
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y", "%d.%m.%Y"):
+    numeric = _DMY_FORMATS if date_order() == "DMY" else _MDY_FORMATS
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", *numeric, "%d.%m.%Y"):
         try:
             return datetime.strptime(val, fmt).date()
         except ValueError:
             continue
     return None
+
+def is_ambiguous_date(val: str) -> bool:
+    """True for numeric dates like 03/04/2025 that are valid both day-first and month-first."""
+    m = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})[/-]\d{4}", normalize_text(val or ""))
+    return bool(m) and m.group(1) != m.group(2) and int(m.group(1)) <= 12 and int(m.group(2)) <= 12
 
 def normalize_date(val: str) -> Optional[str]:
     parsed = parse_date(val)
@@ -195,13 +211,45 @@ def check_date_consistency(dates: Dict[str, Optional[str]]) -> Dict[str, str]:
         problems["received_date"] = "Received date is before collection date"
     return problems
 
-def validate_source_agreement(extracted: str, source_text: str) -> bool:
+# Words that label each lab result on a report (compared without case or punctuation)
+RESULT_LABELS = {
+    "glucose": {"glucose", "glu"},
+    "hemoglobin": {"hemoglobin", "haemoglobin", "hgb", "hb"},
+    "hematocrit": {"hematocrit", "haematocrit", "hct"},
+    "white_blood_cell_count": {"white", "wbc", "leukocyte", "leukocytes", "leucocytes"},
+    "platelet_count": {"platelet", "platelets", "plt"},
+}
+# A result must be within this many words after its label
+LABEL_WINDOW = 12
+
+def validate_source_agreement(extracted: str, source_text: str, field_name: Optional[str] = None) -> bool:
     """
-    True when the extracted value appears in the source text, ignoring case, whitespace and
-    punctuation (so "250,000" matches "250000" and "O'Brien" matches "OBrien"). Used to catch
-    values an AI extractor produced that are not actually printed on the page.
+    True when the extracted value is printed on the page: as whole words (so "90" does not match
+    inside "1990"), ignoring case and punctuation ("250,000" matches "250000", "O'Brien" matches
+    "OBRIEN"). Lab results must also follow their own label (e.g. "Hgb") within a few words, so a
+    number that merely appears somewhere else on the page does not count. Used to catch values
+    an AI extractor produced that are not actually on the page.
     """
     value = _squash(extracted)
     if not value:
         return True
-    return value in _squash(source_text)
+    tokens = [_squash(t) for t in (source_text or "").split()]
+    tokens = [t for t in tokens if t]
+    labels = RESULT_LABELS.get(field_name or "")
+
+    for start in range(len(tokens)):
+        joined = ""
+        for end in range(start, len(tokens)):
+            joined += tokens[end]
+            glued_unit = value.isdigit() and end == start and joined.startswith(value) and _unit_suffix(joined[len(value):])
+            if joined == value or glued_unit:
+                if not labels or any(t in labels for t in tokens[max(0, start - LABEL_WINDOW):start]):
+                    return True
+                break
+            if not value.startswith(joined):
+                break
+    return False
+
+def _unit_suffix(rest: str) -> bool:
+    """A value printed glued to its unit or flag, e.g. "92mg/dL" or "182H"."""
+    return bool(re.fullmatch(r"[a-z%]+[a-z0-9]*", rest))

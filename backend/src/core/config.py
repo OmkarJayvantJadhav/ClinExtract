@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     DEMO_ACCOUNTS: str = ""
     DEMO_PASSWORD: str | None = None
 
+    # How to read numeric dates such as 03/04/2025 that are valid either way: "MDY" (US,
+    # March 4) or "DMY" (most other countries, 3 April). ISO dates (2025-04-03) are unaffected.
+    DATE_ORDER: str = "MDY"
+
     # Extraction configuration
     EXTRACTION_PROVIDER: str = "rule_based"
     EXTRACTION_FALLBACK_ENABLED: bool = False

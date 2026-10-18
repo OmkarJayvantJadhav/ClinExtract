@@ -3,7 +3,7 @@ from src.db.models.extraction import Extraction
 from src.db.models.extracted_field import ExtractedField
 from src.validation.rules import (
     validate_date, validate_numeric_and_range, check_date_consistency, normalize_sex, normalize_date,
-    age_in_years, validate_source_agreement,
+    age_in_years, validate_source_agreement, is_ambiguous_date, date_order,
 )
 from src.validation.confidence import calculate_field_confidence, categorize_confidence
 
@@ -88,6 +88,9 @@ class ValidationEngine:
                 elif st == "IMPLAUSIBLE_VALUE":
                     state = st
                     messages.append(f"Date is in the future: {value}")
+                if n_val and is_ambiguous_date(value):
+                    # Valid either way round: record how it was read so a reviewer can check it
+                    meta = {"ambiguous_date": True, "read_as": "day first" if date_order() == "DMY" else "month first"}
 
             elif field_name == "patient_sex":
                 norm_val = normalize_sex(value)
@@ -147,7 +150,7 @@ class ValidationEngine:
         )
         if not text.strip():
             return True
-        return validate_source_agreement(field.value, text)
+        return validate_source_agreement(field.value, text, field.field_name)
 
     def check_cross_field(self, fields: Iterable[Tuple[str, str, Optional[str]]]) -> Dict[str, str]:
         """

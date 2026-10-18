@@ -184,3 +184,36 @@ def test_gemini_refused_without_phi_consent(monkeypatch):
     monkeypatch.setattr(settings, "ALLOW_EXTERNAL_AI_PHI", False)
     with pytest.raises(NonRetryableExtractionError, match="ALLOW_EXTERNAL_AI_PHI"):
         ExtractionFactory.get_extractor("llm")
+
+
+# --- stronger source check and date order ----------------------------------------
+
+def test_source_agreement_needs_whole_words_and_the_label():
+    page = "Patient Name: Janet Doe DOB: 1990-02-03 Glucose 92 mg/dL Hemoglobin: 14.5 g/dL Platelets 250,000"
+    assert not validate_source_agreement("90", page)  # only inside "1990"
+    assert not validate_source_agreement("Jane Doe", page)  # "Janet" is not "Jane"
+    assert validate_source_agreement("Janet Doe", page)
+    assert validate_source_agreement("14.5", page, "hemoglobin")
+    # 92 is on the page, but not as hemoglobin
+    assert not validate_source_agreement("92", page, "hemoglobin")
+    assert validate_source_agreement("92", page, "glucose")
+    assert validate_source_agreement("250000", page, "platelet_count")
+    assert validate_source_agreement("182", "Glucose 182H mg/dL", "glucose")  # glued flag
+
+
+def test_date_order_setting(monkeypatch):
+    from src.core.config import settings
+    from src.validation.rules import normalize_date
+    assert normalize_date("03/04/2025") == "2025-03-04"  # default MDY
+    assert normalize_date("25/04/2025") == "2025-04-25"  # only valid day first
+    monkeypatch.setattr(settings, "DATE_ORDER", "DMY")
+    assert normalize_date("03/04/2025") == "2025-04-03"
+    assert normalize_date("04/25/2025") == "2025-04-25"  # only valid month first
+
+
+def test_ambiguous_date_is_recorded():
+    e = _extraction(collection_date="09/10/2023", received_date="2023-10-10")
+    ValidationEngine().validate_extraction(e)
+    collected = _field(e, "collection_date")
+    assert collected.normalized_value == "2023-09-10"
+    assert collected.validation_metadata == {"ambiguous_date": True, "read_as": "month first"}
