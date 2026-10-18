@@ -42,12 +42,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng libmagic1
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Migrations apply cleanly to an empty database
+      - name: Migrations apply cleanly and match the models
         env:
           PGPASSWORD: postgres
         run: |
           psql -h localhost -U postgres -c "CREATE DATABASE clinextract_migrations"
           DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/clinextract_migrations alembic upgrade head
+          DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/clinextract_migrations alembic check
           DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/clinextract_migrations alembic downgrade base
       - name: Tests
         run: pytest -q -p no:cacheprovider
