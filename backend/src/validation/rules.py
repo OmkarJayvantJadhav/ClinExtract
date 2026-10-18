@@ -14,6 +14,8 @@ def normalize_text(val: str) -> str:
     return re.sub(r'\s+', ' ', val.strip())
 
 _MDY_FORMATS = ("%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y")
+# 14-Mar-1985, 14 Mar 1985, 14 March 1985, Mar 14, 1985, March 14 1985
+_MONTH_NAME_FORMATS = ("%d-%b-%Y", "%d %b %Y", "%d %B %Y", "%d-%B-%Y", "%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y")
 _DMY_FORMATS = ("%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y")
 
 def date_order() -> str:
@@ -28,7 +30,7 @@ def parse_date(val: str) -> Optional[date]:
     """
     val = normalize_text(val)
     numeric = _DMY_FORMATS if date_order() == "DMY" else _MDY_FORMATS
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", *numeric, "%d.%m.%Y"):
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", *numeric, "%d.%m.%Y", *_MONTH_NAME_FORMATS):
         try:
             return datetime.strptime(val, fmt).date()
         except ValueError:
@@ -94,6 +96,10 @@ def parse_printed_range(text: Optional[str]) -> Optional[Tuple[Optional[float], 
         return (None, limit) if op in ("<", "<=", "\u2264") else (limit, None)
     return None
 
+# Values beyond this multiple of the range's upper limit (or below its lower limit divided by
+# it) are treated as a likely misread rather than a plain abnormal result.
+FAR_OUTSIDE_FACTOR = 4.0
+
 def normalize_flag(flag: Optional[str]) -> Optional[str]:
     """"H"/"L" for a printed high/low flag (HH/LL/High/Low included), else None."""
     f = (flag or "").strip().upper()
@@ -153,6 +159,9 @@ def validate_numeric_and_range(
             lower, upper = (None if b is None else round(b * scale, 3) for b in printed)
             basis = "report"
             meta["printed_range"] = printed_range
+            # Which side of the printed range the value falls on; checked against the report's
+            # own H/L flags by the validation engine.
+            meta["printed_direction"] = "H" if upper is not None and num > upper else "L" if lower is not None and num < lower else None
         else:
             ref = get_reference_range(field_name, sex, age)
             if ref is None:
@@ -162,6 +171,10 @@ def validate_numeric_and_range(
         meta["range_basis"] = basis
 
         outside = (lower is not None and num < lower) or (upper is not None and num > upper)
+        if (upper and num > FAR_OUTSIDE_FACTOR * upper) or (lower and num < lower / FAR_OUTSIDE_FACTOR):
+            # A misplaced decimal point moves a value tenfold; a human should look at this one.
+            meta.update({"value": round(num, 3), "lower": lower, "upper": upper, "reason": "far_outside_range"})
+            return "EXTREME_VALUE", norm_str, meta
         flag = normalize_flag(printed_flag)
         if flag:
             meta["printed_flag"] = flag
@@ -210,6 +223,17 @@ def check_date_consistency(dates: Dict[str, Optional[str]]) -> Dict[str, str]:
     if collected and received and received < collected:
         problems["received_date"] = "Received date is before collection date"
     return problems
+
+def name_looks_misread(name: Optional[str]) -> bool:
+    """
+    OCR tells: a digit in a name ("J0hn"), or a word starting lowercase in an otherwise
+    capitalized name ("Neil lyer" for "Neil Iyer", the classic I/l confusion).
+    """
+    words = [w for w in re.split(r"[\s,]+", name or "") if w]
+    if any(ch.isdigit() for w in words for ch in w):
+        return True
+    starts = [w[0] for w in words if w[0].isalpha()]
+    return any(c.islower() for c in starts) and any(c.isupper() for c in starts)
 
 # Words that label each lab result on a report (compared without case or punctuation)
 RESULT_LABELS = {

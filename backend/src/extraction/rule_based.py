@@ -9,7 +9,9 @@ _LABELS = (
     r"Hemoglobin|Haemoglobin|Hgb|Hematocrit|Haematocrit|Hct|White|WBC|Platelets?|PLT|Specimen|Sample|"
     r"Collect(?:ion|ed)|Received|Accession|Ordering|Physician|Doctor|Report"
 )
-_DATE = r"\d{4}-\d{1,2}-\d{1,2}|\d{4}/\d{1,2}/\d{1,2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}-\d{1,2}-\d{4}|\d{1,2}\.\d{1,2}\.\d{4}"
+_MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?"
+# ISO, numeric day/month, dotted, and month-name dates (14-Mar-1985, 14 March 1985, Mar 14, 1985)
+_DATE = rf"\d{{1,2}}[-\s]{_MONTH}[-\s]\d{{4}}|{_MONTH}\s+\d{{1,2}},?\s+\d{{4}}|" r"\d{4}-\d{1,2}-\d{1,2}|\d{4}/\d{1,2}/\d{1,2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}-\d{1,2}-\d{4}|\d{1,2}\.\d{1,2}\.\d{4}"
 _COUNT_UNIT = r"(?:x\s*)?10\^?[39]\s*/\s*[uµμ]?L|K/[uµμ]L|thou/[uµμ]L|cells/[uµμ]L|/[uµμ]L|/mm3"
 _NUMBER = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
 # Abnormal flag printed next to a result (H, L, HH, LL, High, Low). Not followed by a letter or
@@ -38,7 +40,7 @@ class RuleBasedExtractor(BaseExtractor):
             {"field_name": "specimen_type", "pattern": r"(?i)(?:specimen|sample)(?:\s*type)?\s*:?\s*(?P<value>whole\s+blood|blood|urine|saliva|serum|plasma)\b"},
             {"field_name": "collection_date", "pattern": rf"(?i)(?:collection\s*date|date\s*collected|collected(?:\s*on)?|draw\s*date)\s*:?\s*(?P<value>{_DATE})"},
             {"field_name": "received_date", "pattern": rf"(?i)(?:received\s*date|date\s*received|received(?:\s*on)?)\s*:?\s*(?P<value>{_DATE})"},
-            {"field_name": "glucose", "pattern": rf"(?i)\bglucose(?:,?\s*(?:fasting|random|serum|plasma))?\s*:?\s*{_result('mg/dL|mmol/L')}"},
+            {"field_name": "glucose", "pattern": rf"(?i)\b(?:glucose|glu)(?:,?\s*(?:fasting|random|serum|plasma))?\s*:?\s*{_result('mg/dL|mmol/L')}"},
             {"field_name": "hemoglobin", "pattern": rf"(?i)\b(?:hemoglobin|haemoglobin|hgb|hb)\b\s*:?\s*{_result('g/dL|g/L|mmol/L')}"},
             {"field_name": "hematocrit", "pattern": rf"(?i)\b(?:hematocrit|haematocrit|hct)\b\s*:?\s*{_result('%|L/L')}"},
             {"field_name": "white_blood_cell_count", "pattern": rf"(?i)\b(?:white\s*blood\s*cell(?:s|\s*count)?|wbc(?:\s*count)?|leukocytes?)\b\s*:?\s*{_result(_COUNT_UNIT)}"},

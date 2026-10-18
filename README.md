@@ -277,6 +277,26 @@ also requires organizational measures such as agreements, policies and risk asse
 - Documents whose processing failed can be retried from the document page (admins and operators),
   without re-uploading.
 
+## Measured Accuracy
+
+`backend/scripts/evaluate_extraction.py` generates labeled synthetic lab reports that vary the
+layout (table, `Label: value`, abbreviations), label wording, date formats (ISO, US, `14-Mar-1985`),
+units (mg/dL or mmol/L, g/dL or g/L, K/uL or 10^9/L), sex-specific ranges, H/L flags and media
+(digital PDF, noisy rotated scan, typed header with a pasted results table), runs them through
+the real pipeline with the rule-based extractor, and scores every field.
+
+| Set | Field accuracy | Documents auto-accepted | Auto-accepted and fully correct |
+|---|---|---|---|
+| 60 reports, seed 0 | 99.3% | 70.0% | 100% |
+| 90 reports, seed 7 | 99.7% | 73.3% | 100% |
+| 60 reports, seed 21 | 98.9% | 68.3% | 100% |
+
+The remaining errors are OCR misreads on scans (a dropped decimal point, a wrong digit, I/l in a
+name); each was caught by a check and sent to review rather than auto-accepted. CI runs a smaller
+set (`tests/test_extraction_accuracy.py`) and fails if accuracy drops or a wrong document would be
+auto-accepted. These are synthetic documents: measure on your own (de-identified) reports before
+relying on the numbers.
+
 ## AI Provider
 
 - **RuleBased** is the default extraction provider, guaranteeing deterministic results.

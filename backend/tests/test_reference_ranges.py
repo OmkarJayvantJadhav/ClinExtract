@@ -91,3 +91,50 @@ def test_engine_uses_printed_range_and_explains_it():
     assert fields["hemoglobin"].validation_state == "OUTSIDE_REFERENCE_RANGE"
     assert fields["hemoglobin"].validation_messages[0] == "Value 10.1 g/dL is outside the report's reference range (11.5 - 15.5)"
     assert e.decision == "AUTO_ACCEPTED"
+
+
+def _engine_fields(rows, **extra):
+    """rows: field -> (value, unit, printed range, flag)"""
+    values = {"patient_name": "A B", "date_of_birth": "1980-04-12", "patient_id": "P-1", "specimen_type": "Blood",
+              "collection_date": "2026-10-01", "received_date": "2026-10-02", **extra}
+    e = Extraction(id=uuid.uuid4(), model_version="t", provider="t", prompt_version="t")
+    e.extracted_fields = [ExtractedField(field_name=k, value=v, confidence=100.0) for k, v in values.items()] + [
+        ExtractedField(field_name=k, value=v, unit=u, reference_range=r, abnormal_flag=fl, confidence=100.0)
+        for k, (v, u, r, fl) in rows.items()
+    ]
+    ValidationEngine().validate_extraction(e)
+    return e, {f.field_name: f for f in e.extracted_fields}
+
+NORMAL_ROWS = {
+    "glucose": ("92", "mg/dL", "70 - 100", None), "hemoglobin": ("14.8", "g/dL", "13.5 - 17.5", None),
+    "hematocrit": ("44.1", "%", "41 - 50", None), "white_blood_cell_count": ("7.2", "K/uL", "4.5 - 11.0", None),
+    "platelet_count": ("265", "K/uL", "150 - 450", None),
+}
+
+
+def test_decimal_misread_far_outside_range_goes_to_review():
+    e, f = _engine_fields({**NORMAL_ROWS, "white_blood_cell_count": ("73", "K/uL", "4.5 - 11.0", None)})
+    assert f["white_blood_cell_count"].validation_state == "EXTREME_VALUE"
+    assert "decimal point" in f["white_blood_cell_count"].validation_messages[0]
+    assert e.decision == "REVIEW_REQUIRED"
+
+
+def test_flag_mismatch_on_reports_that_print_flags():
+    # The report flags glucose high, so it uses flags; WBC 13.0 reads high but is not flagged
+    rows = {**NORMAL_ROWS, "glucose": ("182", "mg/dL", "70 - 100", "H"),
+            "white_blood_cell_count": ("13.0", "K/uL", "4.5 - 11.0", None)}
+    e, f = _engine_fields(rows)
+    assert f["glucose"].validation_state == "OUTSIDE_REFERENCE_RANGE"  # flag agrees
+    assert f["white_blood_cell_count"].validation_state == "FLAG_MISMATCH"
+    assert "marks this result normal" in f["white_blood_cell_count"].validation_messages[0]
+    assert e.decision == "REVIEW_REQUIRED"
+
+    # Flagged low, but the value read is normal
+    _, f = _engine_fields({**NORMAL_ROWS, "hemoglobin": ("14.0", "g/dL", "13.5 - 17.5", "L")})
+    assert f["hemoglobin"].validation_state == "FLAG_MISMATCH"
+
+
+def test_no_flag_check_on_reports_without_flags():
+    e, f = _engine_fields({**NORMAL_ROWS, "glucose": ("120", "mg/dL", "70 - 100", None)})
+    assert f["glucose"].validation_state == "OUTSIDE_REFERENCE_RANGE"
+    assert e.decision == "AUTO_ACCEPTED"

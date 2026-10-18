@@ -3,7 +3,7 @@ from src.db.models.extraction import Extraction
 from src.db.models.extracted_field import ExtractedField
 from src.validation.rules import (
     validate_date, validate_numeric_and_range, check_date_consistency, normalize_sex, normalize_date,
-    age_in_years, validate_source_agreement, is_ambiguous_date, date_order,
+    age_in_years, validate_source_agreement, is_ambiguous_date, date_order, normalize_flag, name_looks_misread,
 )
 from src.validation.confidence import calculate_field_confidence, categorize_confidence
 
@@ -25,9 +25,14 @@ DATE_FIELDS = {
 OPTIONAL_FIELDS = {"patient_sex"}
 VALIDATED_FIELDS = MANDATORY_FIELDS | OPTIONAL_FIELDS
 
+# Fields where a misread matters most: lab results and patient identity. These must be read
+# with high confidence (not just "review recommended") for a document to skip review.
+CRITICAL_FIELDS = NUMERIC_FIELDS | {"patient_name", "patient_id", "date_of_birth"}
+
 # States that mean the value itself is unusable and must be corrected before a human can
 # approve the document. Every other non-VALID state (OUTSIDE_REFERENCE_RANGE,
-# UNRECOGNIZED_UNIT, INCONSISTENT_DATES, SOURCE_MISMATCH) forces human review but can be
+# UNRECOGNIZED_UNIT, INCONSISTENT_DATES, SOURCE_MISMATCH, EXTREME_VALUE, FLAG_MISMATCH,
+# POSSIBLE_MISREAD) forces human review but can be
 # confirmed as-is: an abnormal lab value is a clinical finding, not an extraction error.
 BLOCKING_STATES = {"MISSING", "INVALID_FORMAT", "IMPLAUSIBLE_VALUE"}
 
@@ -111,6 +116,11 @@ class ValidationEngine:
                         messages.append(f"Invalid numeric format: {value}")
                     elif st == "OUTSIDE_REFERENCE_RANGE":
                         messages.append(self._abnormal_message(n_val, meta))
+                    elif st == "EXTREME_VALUE" and meta.get("reason") == "far_outside_range":
+                        messages.append(
+                            f"Value {n_val} is far outside the reference range ({meta.get('lower')} - {meta.get('upper')}); "
+                            "check for a misread digit or decimal point"
+                        )
                     elif st == "EXTREME_VALUE":
                         messages.append(
                             f"Value {n_val} {meta.get('canonical_unit', '')} is outside any plausible result "
@@ -134,6 +144,29 @@ class ValidationEngine:
         if meta.get("range_basis") == "report":
             return f"Value {value} {unit} is outside the report's reference range ({meta['printed_range']})".replace("  ", " ")
         return f"Value {value} is outside the {meta.get('range_basis', 'adult')} reference range ({lower} - {upper} {unit})".rstrip()
+
+    @staticmethod
+    def _flag_mismatch(field: ExtractedField) -> Optional[str]:
+        meta = field.validation_metadata or {}
+        if field.field_name not in NUMERIC_FIELDS or field.validation_state not in ("VALID", "OUTSIDE_REFERENCE_RANGE"):
+            return None
+        if meta.get("range_basis") != "report":
+            return None
+        printed = normalize_flag(field.abnormal_flag)
+        actual = meta.get("printed_direction")
+        if printed == actual:
+            return None
+        words = {"H": "high", "L": "low", None: "normal"}
+        return (
+            f"The report marks this result {words[printed]}, but the value read ({field.normalized_value}) is "
+            f"{words[actual]} for its range ({meta.get('printed_range')}); check for a misread digit or decimal point"
+        )
+
+    @staticmethod
+    def _read_by_ocr(field: ExtractedField, document_data: Optional[Dict[str, Any]]) -> bool:
+        pages = (document_data or {}).get("pages") or []
+        page = next((p for p in pages if p.get("page_number") == field.page_num), None)
+        return bool(page and page.get("ocr_used"))
 
     @staticmethod
     def _found_in_source(field: ExtractedField, document_data: Optional[Dict[str, Any]]) -> bool:
@@ -208,6 +241,10 @@ class ValidationEngine:
             elif state != "MISSING" and not self._found_in_source(field, document_data):
                 state = "SOURCE_MISMATCH"
                 messages.append("Extracted value was not found in the document text")
+            elif (field.field_name == "patient_name" and state == "VALID"
+                  and self._read_by_ocr(field, document_data) and name_looks_misread(field.value)):
+                state = "POSSIBLE_MISREAD"
+                messages.append("The name looks misread by OCR (e.g. a lowercase l for a capital I); check it against the document")
 
             field.normalized_value = norm_val
             field.validation_state = state
@@ -220,6 +257,15 @@ class ValidationEngine:
             if field.field_name in inconsistencies and field.validation_state == "VALID":
                 field.validation_state = "INCONSISTENT_DATES"
                 field.validation_messages = list(field.validation_messages or []) + [inconsistencies[field.field_name]]
+
+        # Pass 2b: on reports that print H/L flags, the flag must agree with the value we read.
+        # A disagreement usually means a misread digit or decimal point.
+        if any(f.abnormal_flag for f in mandatory if f.field_name in NUMERIC_FIELDS):
+            for field in mandatory:
+                message = self._flag_mismatch(field)
+                if message:
+                    field.validation_state = "FLAG_MISMATCH"
+                    field.validation_messages = [message]
 
         # Pass 3: confidence and decision
         for field in mandatory:
@@ -243,6 +289,8 @@ class ValidationEngine:
             if state not in self.auto_acceptable_states:
                 is_auto_accepted = False
             if field.confidence_category == "LOW":
+                is_auto_accepted = False
+            if field.field_name in CRITICAL_FIELDS and field.confidence_category != "HIGH":
                 is_auto_accepted = False
 
         # Overall confidence

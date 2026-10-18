@@ -217,3 +217,22 @@ def test_ambiguous_date_is_recorded():
     collected = _field(e, "collection_date")
     assert collected.normalized_value == "2023-09-10"
     assert collected.validation_metadata == {"ambiguous_date": True, "read_as": "month first"}
+
+
+def test_misread_names_on_scanned_pages():
+    from src.validation.rules import name_looks_misread
+    assert name_looks_misread("Neil lyer") and name_looks_misread("J0hn Smith")
+    assert not name_looks_misread("Neil Iyer") and not name_looks_misread("NEIL IYER")
+    assert not name_looks_misread("ludwig van beethoven")  # consistently lowercase is not an OCR tell
+    words = "Patient Name: Neil lyer DOB: 1998-04-12".split()
+
+    def run(ocr_used):
+        e = _extraction(patient_name="Neil lyer")
+        for f in e.extracted_fields:
+            f.page_num = 1
+        page = {"page_number": 1, "ocr_used": ocr_used, "words": [{"text": t} for t in words]}
+        ValidationEngine().validate_extraction(e, {"pages": [page]})
+        return _field(e, "patient_name").validation_state
+
+    assert run(ocr_used=True) == "POSSIBLE_MISREAD"
+    assert run(ocr_used=False) == "VALID"  # digital text is exact

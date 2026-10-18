@@ -94,7 +94,7 @@ function ThresholdsCard({ thresholds, editable }) {
 
   const rows = [
     ['auto_accept', 'Auto-accept threshold', 'Overall confidence at or above this (with every field valid) is accepted without review.'],
-    ['review_recommended', 'Review recommended below', 'Fields below this confidence are flagged "review recommended".'],
+    ['review_recommended', 'Review recommended below', 'Lab results and patient identifiers (name, ID, birth date) below this confidence send the document to review; other fields are only flagged.'],
     ['low_confidence', 'Low confidence below', 'Fields below this confidence always route the document to human review.'],
   ];
 
