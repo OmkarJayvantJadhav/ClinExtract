@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from src.core.config import settings
 from src.core.database import get_db
-from src.core.rate_limit import SlidingWindowLimiter
+from src.core.rate_limit import DatabaseRateLimiter
 from src.db.models.user import User, UserRole
 from src.schemas.auth import UserLogin, UserResponse, PasswordChangeRequest
 from src.utils.security import (
@@ -20,7 +20,7 @@ from src.services.audit import log_audit_event
 router = APIRouter()
 
 RESOURCE_USER = "User"
-login_limiter = SlidingWindowLimiter(settings.LOGIN_RATE_LIMIT_PER_MINUTE, 60.0)
+login_limiter = DatabaseRateLimiter(settings.LOGIN_RATE_LIMIT_PER_MINUTE, 60.0)
 
 def _client_ip(request: Request) -> str:
     # Behind the bundled reverse proxy the real client address is in X-Real-IP (set by Caddy,
@@ -65,7 +65,7 @@ async def login(
     db: AsyncSession = Depends(get_db)
 ) -> Any:
     ip = _client_ip(request)
-    if not login_limiter.allow(ip):
+    if not await login_limiter.allow(db, ip):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts. Try again in a minute.")
 
     stmt = select(User).where(User.username == login_data.username).with_for_update()

@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     # --- Authentication hardening ---
     LOGIN_MAX_FAILED_ATTEMPTS: int = 5
     LOGIN_LOCKOUT_MINUTES: int = 15
-    # Per-client-IP login attempts allowed per minute (per API process)
+    # Per-client-IP login attempts allowed per minute (shared by all API processes)
     LOGIN_RATE_LIMIT_PER_MINUTE: int = 20
     PASSWORD_MIN_LENGTH: int = 12
     # Mark cookies Secure. Defaults to True in production; set explicitly when serving over HTTPS elsewhere.

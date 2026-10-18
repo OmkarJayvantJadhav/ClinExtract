@@ -325,3 +325,24 @@ def test_review_heartbeat_keeps_the_claim(admin, new_user):
     other, _ = login(new_user["username"], STRONG)
     assert other.post(f"/api/v1/reviews/{doc_id}/heartbeat").status_code in (403, 404)
     admin.post(f"/api/v1/reviews/{doc_id}/release")
+
+
+# --- login rate limit shared across processes ---------------------------------------
+
+def test_login_rate_limit_is_enforced(monkeypatch):
+    from src.api.routes.auth import login_limiter
+    monkeypatch.setattr(login_limiter, "limit", 3)
+    anon = TestClient(app)
+    codes = [anon.post("/api/v1/auth/login", json={"username": "nobody", "password": "x"}).status_code for _ in range(5)]
+    assert codes == [401, 401, 401, 429, 429]
+
+
+async def test_rate_limit_is_shared_between_processes(db_session):
+    from src.core.rate_limit import DatabaseRateLimiter
+    # Two limiters stand in for two API processes: they see each other's attempts
+    first, second = DatabaseRateLimiter(2, 60), DatabaseRateLimiter(2, 60)
+    key = f"ip-{uuid.uuid4().hex[:8]}"
+    assert await first.allow(db_session, key)
+    assert await second.allow(db_session, key)
+    assert not await first.allow(db_session, key)
+    assert await second.allow(db_session, f"{key}-other")  # per client

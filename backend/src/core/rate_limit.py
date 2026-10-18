@@ -1,35 +1,39 @@
-import time
-from collections import defaultdict, deque
-from threading import Lock
+import random
+from datetime import datetime, timedelta, timezone
 
-class SlidingWindowLimiter:
-    """
-    Simple in-process sliding-window rate limiter.
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-    Limits are per API process; with several replicas the effective limit is multiplied,
-    which is acceptable as a first line of defence (account lockout is enforced in the DB).
+from src.db.models.login_attempt import LoginAttempt
+
+class DatabaseRateLimiter:
     """
+    Sliding-window rate limiter backed by the database, so the limit holds across every API
+    process and replica (an in-memory limiter is multiplied by the number of processes).
+    """
+
+    # Rows older than this are deleted now and then; they no longer affect any window.
+    RETENTION = timedelta(hours=1)
 
     def __init__(self, limit: int, window_seconds: float = 60.0):
         self.limit = limit
-        self.window = window_seconds
-        self._hits: dict[str, deque] = defaultdict(deque)
-        self._lock = Lock()
+        self.window = timedelta(seconds=window_seconds)
 
-    def allow(self, key: str) -> bool:
-        now = time.monotonic()
-        with self._lock:
-            hits = self._hits[key]
-            while hits and now - hits[0] > self.window:
-                hits.popleft()
-            if len(hits) >= self.limit:
-                return False
-            hits.append(now)
-            if len(self._hits) > 10_000:  # bound memory under a spray of distinct keys
-                for k in [k for k, v in self._hits.items() if not v]:
-                    del self._hits[k]
-            return True
-
-    def reset(self) -> None:
-        with self._lock:
-            self._hits.clear()
+    async def allow(self, db: AsyncSession, key: str) -> bool:
+        """
+        Records an attempt for `key` and returns whether it is within the limit. Commits on its
+        own, so attempts count even when the request fails afterwards (e.g. unknown username).
+        """
+        now = datetime.now(timezone.utc)
+        key = key[:64]
+        recent = await db.scalar(
+            select(func.count()).select_from(LoginAttempt)
+            .where(LoginAttempt.client_key == key, LoginAttempt.attempted_at > now - self.window)
+        )
+        if recent >= self.limit:
+            return False
+        db.add(LoginAttempt(client_key=key, attempted_at=now))
+        if random.random() < 0.01:
+            await db.execute(delete(LoginAttempt).where(LoginAttempt.attempted_at < now - self.RETENTION))
+        await db.commit()
+        return True

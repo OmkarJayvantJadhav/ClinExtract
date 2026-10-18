@@ -14,7 +14,6 @@ from src.validation.rules import validate_source_agreement, age_in_years
 from src.validation.reference_ranges import get_reference_range
 from src.services.system_settings import validate_thresholds, DEFAULT_THRESHOLDS
 from src.storage.local import LocalVolumeStorage
-from src.core.rate_limit import SlidingWindowLimiter
 from src.utils.security import password_policy_error
 
 
@@ -154,12 +153,6 @@ def test_password_policy():
     assert password_policy_error("alllowercaseletters") is not None
     assert password_policy_error("Reviewer-Pass-2026", username="reviewer") is not None
     assert password_policy_error("Correct-Horse-42") is None
-
-def test_rate_limiter():
-    limiter = SlidingWindowLimiter(limit=3, window_seconds=60)
-    assert [limiter.allow("ip") for _ in range(4)] == [True, True, True, False]
-    assert limiter.allow("other-ip")
-
 
 # --- settings / external AI guard ----------------------------------------------
 
