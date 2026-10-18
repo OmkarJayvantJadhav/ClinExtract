@@ -1,3 +1,6 @@
+import csv
+import hashlib
+import io
 import json
 import os
 import uuid
@@ -100,6 +103,20 @@ def _patient_match(term: str):
         .exists()
     )
 
+def _filtered(status, q, created_from, created_to):
+    """Documents matching the list/export filters."""
+    query = select(Document)
+    if status:
+        query = query.where(Document.status.in_(status))
+    if q and q.strip():
+        term = q.strip()
+        query = query.where(or_(Document.filename.ilike(_like(term), escape="\\"), _patient_match(term)))
+    if created_from:
+        query = query.where(Document.created_at >= created_from)
+    if created_to:
+        query = query.where(Document.created_at < created_to)
+    return query
+
 def _ordering(sort: str) -> list:
     if sort == "priority":
         return [_needs_attention().desc(), Document.created_at.asc()]
@@ -122,16 +139,7 @@ async def list_documents(
     """
     Get paginated list of documents with optional search and filters.
     """
-    query = select(Document)
-    if status:
-        query = query.where(Document.status.in_(status))
-    if q and q.strip():
-        term = q.strip()
-        query = query.where(or_(Document.filename.ilike(_like(term), escape="\\"), _patient_match(term)))
-    if created_from:
-        query = query.where(Document.created_at >= created_from)
-    if created_to:
-        query = query.where(Document.created_at < created_to)
+    query = _filtered(status, q, created_from, created_to)
 
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
 
@@ -152,10 +160,121 @@ async def list_documents(
         "pages": (total + size - 1) // size
     }
 
+EXPORT_FIELDS = [
+    "patient_name", "patient_id", "date_of_birth", "patient_sex", "specimen_type", "collection_date",
+    "received_date", "glucose", "hemoglobin", "hematocrit", "white_blood_cell_count", "platelet_count",
+]
+EXPORT_LIMIT = 10000
+# Exported by default: documents whose data is final (accepted automatically or by a reviewer)
+FINAL_STATUSES = [DocumentStatus.AUTO_ACCEPTED, DocumentStatus.HUMAN_APPROVED]
+
+def _final_flag(f: ExtractedField) -> str | None:
+    """H/L for the final (possibly corrected) value against its reference range, else None."""
+    meta = f.validation_metadata or {}
+    if "printed_direction" in meta:
+        return meta["printed_direction"]
+    value, lower, upper = meta.get("value"), meta.get("lower"), meta.get("upper")
+    if value is None:
+        return None
+    return "H" if upper is not None and value > upper else "L" if lower is not None and value < lower else None
+
+def _export_field(f: ExtractedField) -> dict:
+    meta = f.validation_metadata or {}
+    return {
+        "value": f.normalized_value if f.normalized_value not in (None, "") else f.current_value,
+        "unit": meta.get("canonical_unit") or f.unit,
+        "flag": _final_flag(f),
+        "printed_value": f.current_value,
+        "printed_unit": f.unit,
+        "printed_flag": f.abnormal_flag,
+        "reference_range": f.reference_range,
+        "validation_state": f.validation_state,
+        "corrected": bool(f.is_corrected),
+    }
+
+def _csv_cell(value) -> str:
+    text = "" if value is None else str(value)
+    # Spreadsheet formula injection: never let a cell start with a formula character
+    return "'" + text if text[:1] in ("=", "+", "@", "\t", "\r") or (text[:1] == "-" and not _is_number(text)) else text
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+@router.get("/export")
+async def export_documents(
+    request: Request,
+    format: Literal["csv", "json"] = Query("csv"),
+    status: list[DocumentStatus] | None = Query(None, description="Defaults to final documents (auto-accepted or approved)"),
+    q: str | None = Query(None, max_length=200),
+    created_from: datetime | None = Query(None),
+    created_to: datetime | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.OPERATOR])),
+):
+    """
+    Extracted data of matching documents, one row (CSV) or object (JSON) per document, with the
+    reviewed values: corrections applied, results normalized to their canonical units.
+    """
+    statuses = status or FINAL_STATUSES
+    query = (
+        _filtered(statuses, q, created_from, created_to)
+        .order_by(Document.created_at.asc(), Document.id)
+        .limit(EXPORT_LIMIT)
+        .options(selectinload(Document.extractions).selectinload(Extraction.extracted_fields).selectinload(ExtractedField.field_corrections))
+    )
+    docs = (await db.execute(query)).scalars().all()
+
+    records = []
+    for doc in docs:
+        extraction = doc.extractions[0] if doc.extractions else None
+        fields = {f.field_name: f for f in (extraction.extracted_fields if extraction else [])}
+        records.append({
+            "document_id": str(doc.id),
+            "filename": doc.filename,
+            "status": doc.status.value,
+            "uploaded_at": doc.created_at.isoformat() if doc.created_at else None,
+            "extractor": extraction.extractor_type if extraction else None,
+            "overall_confidence": round(extraction.overall_confidence * 100, 1) if extraction and extraction.overall_confidence is not None else None,
+            "fields": {name: _export_field(fields[name]) for name in EXPORT_FIELDS if name in fields},
+        })
+
+    await log_audit_event(
+        db, action="DOCUMENTS_EXPORTED", resource_type=RESOURCE_DOCUMENT, resource_id="export",
+        user_id=current_user.id, correlation_id=getattr(request.state, "correlation_id", None),
+        after_state={"format": format, "count": len(records), "statuses": [s.value for s in statuses],
+                     "q": q, "created_from": created_from.isoformat() if created_from else None,
+                     "created_to": created_to.isoformat() if created_to else None},
+    )
+    await db.commit()
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    headers = {"Content-Disposition": f'attachment; filename="clinextract-export-{stamp}.{format}"',
+               "Cache-Control": "private, no-store"}
+    if format == "json":
+        return Response(content=json.dumps(records, indent=2), media_type="application/json", headers=headers)
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    base = ["document_id", "filename", "status", "uploaded_at", "extractor", "overall_confidence"]
+    columns = base + [f"{name}{suffix}" for name in EXPORT_FIELDS for suffix in ("", "_unit", "_flag", "_reference_range", "_state")]
+    writer.writerow(columns)
+    for r in records:
+        row = [r[c] for c in base]
+        for name in EXPORT_FIELDS:
+            f = r["fields"].get(name, {})
+            row += [f.get("value"), f.get("unit"), f.get("flag"), f.get("reference_range"), f.get("validation_state")]
+        writer.writerow([_csv_cell(v) for v in row])
+    return Response(content=out.getvalue(), media_type="text/csv; charset=utf-8", headers=headers)
+
 @router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
     request: Request,
     file: UploadFile = File(...),
+    allow_duplicate: bool = Query(False, description="Store the file even if an identical one was uploaded before"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.OPERATOR])),
     storage: StorageService = Depends(get_storage_service)
@@ -167,8 +286,23 @@ async def upload_document(
     """
     correlation_id = getattr(request.state, "correlation_id", None)
 
+    file_bytes, mime_type = await storage.read_upload(file)
+    file_size = len(file_bytes)
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
+    if not allow_duplicate:
+        existing = (await db.execute(
+            select(Document).where(Document.content_hash == content_hash).order_by(Document.created_at).limit(1)
+        )).scalar_one_or_none()
+        if existing:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+                "code": "DUPLICATE_DOCUMENT",
+                "message": f"This file was already uploaded as {existing.filename}.",
+                "existing_document_id": str(existing.id),
+                "existing_status": existing.status.value,
+            })
+
     try:
-        storage_key, mime_type, file_size = await storage.store_document(file)
+        storage_key = await storage.store_bytes(file_bytes)
     except HTTPException:
         raise
     except Exception as e:
@@ -184,6 +318,7 @@ async def upload_document(
             uploader_id=current_user.id,
             filename=safe_filename,
             storage_key=storage_key,
+            content_hash=content_hash,
             status=DocumentStatus.UPLOADED
         )
         db.add(new_doc)

@@ -21,6 +21,8 @@ class Document(BaseModel):
     filename: Mapped[str] = mapped_column(String)
     storage_key: Mapped[str] = mapped_column(String, unique=True)
     doc_type: Mapped[str] = mapped_column(String, nullable=True)
+    # SHA-256 of the uploaded file, to spot the same file uploaded twice
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[DocumentStatus] = mapped_column(Enum(DocumentStatus, name="document_status_enum"), default=DocumentStatus.UPLOADED)
 
     uploader = relationship("User", back_populates="documents")

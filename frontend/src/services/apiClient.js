@@ -88,3 +88,30 @@ export async function fetchApi(endpoint, options = {}) {
   if (response.status === 204) return null;
   return await response.json();
 }
+
+/**
+ * Uploads one document with real progress reporting (fetch cannot report upload progress).
+ * Resolves with the created document; rejects with ApiError (e.g. status 409 with a
+ * DUPLICATE_DOCUMENT detail when the same file was uploaded before).
+ */
+export function uploadDocument(file, { onProgress, allowDuplicate = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', apiUrl(`/documents${allowDuplicate ? '?allow_duplicate=true' : ''}`));
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('X-CSRF-Token', getCsrfToken());
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText || '{}'); } catch { /* non-JSON error page */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new ApiError(errorMessage(body, xhr.status), xhr.status, body?.detail));
+    };
+    xhr.onerror = () => reject(new ApiError('Cannot reach the server', 0));
+    const form = new FormData();
+    form.append('file', file);
+    xhr.send(form);
+  });
+}
