@@ -64,7 +64,7 @@ export function ProcessingStatus({ currentStatus }) {
                     )}
                   </div>
                   {idx !== stages.length - 1 && (
-                    <div className={cn("w-px h-full absolute top-5 bottom-[-1.5rem]", idx < activeIndex ? "bg-success" : "bg-border")} />
+                    <div className={cn("w-px h-full absolute top-5 -bottom-6", idx < activeIndex ? "bg-success" : "bg-border")} />
                   )}
                 </div>
                 <div className="pb-1">

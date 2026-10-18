@@ -12,7 +12,7 @@ function FieldEditor({ initialValue, onSave, onCancel }) {
     <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
       <Input
         autoFocus
-        className="h-8 text-sm font-mono border-primary shadow-sm"
+        className="h-8 text-sm font-mono border-primary shadow-xs"
         value={tempValue ?? ''}
         onChange={(e) => setTempValue(e.target.value)}
         onKeyDown={(e) => {
