@@ -65,7 +65,7 @@ Then run:
 ```bash
 git clone https://github.com/OmkarJayvantJadhav/ClinExtract.git
 cd ClinExtract
-sudo bash scripts/oracle-setup.sh
+sudo bash scripts/setup-server.sh
 ```
 
 The script installs Docker, opens the firewall, generates every secret into
@@ -88,7 +88,7 @@ For a nicer link, get a free subdomain at [duckdns.org](https://www.duckdns.org)
 the VM's public IP, and re-run the script with it:
 
 ```bash
-sudo bash scripts/oracle-setup.sh myclinextract.duckdns.org
+sudo bash scripts/setup-server.sh myclinextract.duckdns.org
 ```
 
 ## Keeping the demo up
@@ -109,7 +109,7 @@ Run these in the `ClinExtract` folder on the VM:
 
 ```bash
 # Update to the latest code (keeps your secrets and data)
-git pull && sudo bash scripts/oracle-setup.sh
+git pull && sudo bash scripts/setup-server.sh
 
 # Status and logs
 sudo docker compose -f docker-compose.prod.yml --env-file .env.production ps

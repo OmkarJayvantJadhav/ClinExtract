@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# One-command setup of a public ClinExtract demo on a fresh Ubuntu VM (built for the Oracle
-# Cloud Always Free Ampere A1 VM; works on any Ubuntu 22.04/24.04 server). See docs/DEPLOY_FREE_ORACLE.md.
+# One-command setup of a public ClinExtract demo on a fresh Ubuntu 22.04/24.04 server, e.g. an
+# Oracle Cloud Always Free VM (docs/DEPLOY_FREE_ORACLE.md) or an AWS t4g.small (docs/DEPLOY_AWS.md).
 #
 #   git clone https://github.com/OmkarJayvantJadhav/ClinExtract.git && cd ClinExtract
-#   sudo bash scripts/oracle-setup.sh                 # https://<public-ip>.sslip.io
-#   sudo bash scripts/oracle-setup.sh myname.duckdns.org
+#   sudo bash scripts/setup-server.sh                 # https://<public-ip>.sslip.io
+#   sudo bash scripts/setup-server.sh myname.duckdns.org
 #
 # Safe to re-run: existing secrets in .env.production are kept, so re-running after
 # `git pull` just rebuilds and restarts the stack.
@@ -66,6 +66,8 @@ if [[ -z "$site" ]]; then
 fi
 
 secret() { openssl rand -hex 32; }
+# One API process and one OCR worker fit a 2 GB server; bigger machines run two of each.
+processes=$([[ "$mem_mb" -lt 3000 ]] && echo 1 || echo 2)
 if [[ ! -f "$ENV_FILE" ]]; then
   log "Creating $ENV_FILE with fresh secrets"
   cat > "$ENV_FILE" <<EOF
@@ -85,6 +87,10 @@ BACKUP_RETENTION_DAYS=7
 DEMO_ACCOUNTS=operator,reviewer,viewer
 DEMO_PASSWORD=Demo-$(openssl rand -hex 6)
 ADMIN_SEED_PASSWORD=Adm1n-$(openssl rand -hex 12)
+
+# Processes (raise on a bigger machine)
+API_WORKERS=$processes
+WORKER_CONCURRENCY=$processes
 
 EXTRACTION_PROVIDER=rule_based
 ALLOW_EXTERNAL_AI_PHI=false
@@ -130,5 +136,5 @@ Demo accounts (shown on the sign-in page): operator, reviewer, viewer / $demo_pa
 Admin (keep private):                      admin / $(env_value ADMIN_SEED_PASSWORD)
 
 Secrets are in $(pwd)/$ENV_FILE. Back up DOCUMENT_ENCRYPTION_KEY somewhere safe.
-Update later with:  git pull && sudo bash scripts/oracle-setup.sh
+Update later with:  git pull && sudo bash scripts/setup-server.sh
 EOF

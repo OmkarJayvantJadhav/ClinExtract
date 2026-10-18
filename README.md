@@ -186,8 +186,9 @@ cp .env.production.example .env.production   # fill in every value
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 docker compose -f docker-compose.prod.yml --env-file .env.production exec backend python scripts/seed_users.py
 ```
-**Free public demo:** [docs/DEPLOY_FREE_ORACLE.md](docs/DEPLOY_FREE_ORACLE.md) runs this stack on
-an Oracle Cloud Always Free VM with one command (`sudo bash scripts/oracle-setup.sh`), including a
+**Free public demo:** one command (`sudo bash scripts/setup-server.sh`) runs this stack on a
+single Ubuntu server: an AWS t4g.small on the free plan ([docs/DEPLOY_AWS.md](docs/DEPLOY_AWS.md))
+or an Oracle Cloud Always Free VM ([docs/DEPLOY_FREE_ORACLE.md](docs/DEPLOY_FREE_ORACLE.md)), including a
 free HTTPS hostname, shared demo accounts with one-click sign-in (`DEMO_ACCOUNTS`,
 `DEMO_PASSWORD`) and downloadable synthetic sample reports
 (`backend/scripts/make_sample_reports.py`).

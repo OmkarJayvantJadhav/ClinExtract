@@ -69,7 +69,7 @@ services:
     build:
       context: ./backend
     restart: unless-stopped
-    command: ["sh", "-c", "alembic upgrade head && uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 2 --no-server-header"]
+    command: ["sh", "-c", "alembic upgrade head && uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-2} --no-server-header"]
     environment: *backend-env
     volumes: *backend-volumes
     depends_on:
@@ -87,7 +87,7 @@ services:
     build:
       context: ./backend
     restart: unless-stopped
-    command: ["celery", "-A", "src.worker.celery_app", "worker", "--loglevel=info", "--concurrency=2"]
+    command: ["celery", "-A", "src.worker.celery_app", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-2}"]
     environment: *backend-env
     volumes: *backend-volumes
     depends_on:
