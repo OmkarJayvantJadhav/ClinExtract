@@ -62,10 +62,12 @@ class ValidationEngine:
             "age": age_in_years(values.get("date_of_birth"), collected),
         }
 
-    def validate_field(self, field_name: str, value: str, unit: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Tuple[str, List[str], Dict[str, Any], str]:
+    def validate_field(self, field_name: str, value: str, unit: Optional[str] = None, context: Optional[Dict[str, Any]] = None,
+                       printed_range: Optional[str] = None, printed_flag: Optional[str] = None) -> Tuple[str, List[str], Dict[str, Any], str]:
         """
         Validates a single field value, returning state, messages, meta, normalized_value.
-        `context` ({"sex", "age"}) selects sex/age-appropriate reference ranges.
+        `context` ({"sex", "age"}) selects sex/age-appropriate reference ranges; the report's own
+        printed range and abnormal flag, when extracted, take precedence over them.
         """
         context = context or {}
         messages = []
@@ -94,7 +96,9 @@ class ValidationEngine:
                     messages.append(f"Unrecognized sex value: {value}")
 
             elif field_name in NUMERIC_FIELDS:
-                st, n_val, m = validate_numeric_and_range(field_name, value, unit, context.get("sex"), context.get("age"))
+                st, n_val, m = validate_numeric_and_range(
+                    field_name, value, unit, context.get("sex"), context.get("age"), printed_range, printed_flag
+                )
                 norm_val = n_val
                 if m:
                     meta = m
@@ -103,10 +107,7 @@ class ValidationEngine:
                     if st == "INVALID_FORMAT":
                         messages.append(f"Invalid numeric format: {value}")
                     elif st == "OUTSIDE_REFERENCE_RANGE":
-                        messages.append(
-                            f"Value {n_val} is outside the {meta.get('range_basis', 'adult')} reference range "
-                            f"({meta.get('lower')} - {meta.get('upper')} {meta.get('canonical_unit', '')})".rstrip()
-                        )
+                        messages.append(self._abnormal_message(n_val, meta))
                     elif st == "EXTREME_VALUE":
                         messages.append(
                             f"Value {n_val} {meta.get('canonical_unit', '')} is outside any plausible result "
@@ -118,6 +119,18 @@ class ValidationEngine:
                     elif st == "NO_REFERENCE_RANGE":
                         messages.append(f"Adult reference ranges do not apply (age {context.get('age')}); verify against the report's own range")
         return state, messages, meta, norm_val
+
+    @staticmethod
+    def _abnormal_message(value: Optional[str], meta: Dict[str, Any]) -> str:
+        unit = meta.get("canonical_unit", "")
+        lower, upper = meta.get("lower"), meta.get("upper")
+        outside = (lower is not None and float(value) < lower) or (upper is not None and float(value) > upper)
+        if meta.get("printed_flag") and not outside:
+            word = "high" if meta["printed_flag"] == "H" else "low"
+            return f"Value {value} {unit} is flagged {word} on the report".replace("  ", " ")
+        if meta.get("range_basis") == "report":
+            return f"Value {value} {unit} is outside the report's reference range ({meta['printed_range']})".replace("  ", " ")
+        return f"Value {value} is outside the {meta.get('range_basis', 'adult')} reference range ({lower} - {upper} {unit})".rstrip()
 
     @staticmethod
     def _found_in_source(field: ExtractedField, document_data: Optional[Dict[str, Any]]) -> bool:
@@ -182,7 +195,9 @@ class ValidationEngine:
 
         # Pass 1: per-field validation
         for field in mandatory:
-            state, messages, meta, norm_val = self.validate_field(field.field_name, field.value, field.unit, context)
+            state, messages, meta, norm_val = self.validate_field(
+                field.field_name, field.value, field.unit, context, field.reference_range, field.abnormal_flag
+            )
 
             if document_data and document_data.get("mock_mismatch", {}).get(field.field_name):
                 state = "SOURCE_MISMATCH"

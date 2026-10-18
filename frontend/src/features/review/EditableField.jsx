@@ -94,6 +94,8 @@ export function EditableField({ field, currentValue, isCorrected, onSelect, onEd
                 {currentValue === null || currentValue === undefined || currentValue === '' ? <span className="italic text-muted-foreground">— not extracted —</span> : currentValue}
               </span>
               {field.unit && <span className="text-xs text-muted-foreground font-mono">{field.unit}</span>}
+              {field.abnormalFlag && <span className="text-xs font-semibold text-warning-foreground">{field.abnormalFlag}</span>}
+              {field.referenceRange && <span className="text-xs text-muted-foreground">(ref {field.referenceRange})</span>}
             </div>
             
             <div className="flex flex-col items-end gap-1">

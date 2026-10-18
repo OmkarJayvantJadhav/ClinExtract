@@ -25,7 +25,8 @@ def _run(filename):
     result = RuleBasedExtractor().extract(artifact)
     extraction = Extraction(id=uuid.uuid4(), model_version="t", provider="t", prompt_version="t")
     extraction.extracted_fields = [
-        ExtractedField(field_name=f.field_name, value=f.value, unit=f.unit, confidence=f.confidence, page_num=f.page_num)
+        ExtractedField(field_name=f.field_name, value=f.value, unit=f.unit, confidence=f.confidence, page_num=f.page_num,
+                       reference_range=f.reference_range, abnormal_flag=f.abnormal_flag)
         for f in result.fields
     ]
     ValidationEngine().validate_extraction(extraction, artifact)
@@ -41,7 +42,10 @@ def test_sample_reaches_expected_decision(filename):
 def test_abnormal_sample_is_flagged():
     _, fields = _run("02_abnormal_results.pdf")
     assert fields["glucose"].validation_state == "OUTSIDE_REFERENCE_RANGE"
-    assert fields["hemoglobin"].validation_metadata["range_basis"] == "adult female"
+    # Checked against the report's own (female) range, with the printed L flag captured
+    hemoglobin = fields["hemoglobin"]
+    assert hemoglobin.validation_metadata["range_basis"] == "report"
+    assert (hemoglobin.reference_range, hemoglobin.abnormal_flag) == ("12.0 - 15.5", "L")
 
 
 def test_correction_sample_has_blocking_issues():
@@ -55,10 +59,10 @@ def test_misread_decimal_sample_is_extreme():
     assert fields["hemoglobin"].validation_state == "EXTREME_VALUE"
 
 
-@pytest.mark.parametrize("filename", ["03_scanned_report.jpg", "06_mixed_page.pdf"])
-def test_ocr_samples_read_every_result(filename):
+@pytest.mark.parametrize("filename, wbc", [("03_scanned_report.jpg", "6.8"), ("06_mixed_page.pdf", "7.2")])
+def test_ocr_samples_read_every_result(filename, wbc):
     _, fields = _run(filename)
-    expected = {"glucose": "92", "white_blood_cell_count": "7.2", "platelet_count": "265"}
+    expected = {"glucose": "92", "white_blood_cell_count": wbc, "platelet_count": "265"}
     assert {name: fields[name].value for name in expected} == expected
     assert all(fields[name].validation_state != "MISSING" for name in fields)
 

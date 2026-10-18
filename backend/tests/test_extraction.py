@@ -1,5 +1,6 @@
 import pytest
 from src.extraction.rule_based import RuleBasedExtractor
+from src.extraction.schemas import CLINICAL_EXTRACTION_PROMPT_VERSION
 
 def test_rule_based_extractor():
     extractor = RuleBasedExtractor()
@@ -81,7 +82,7 @@ def test_llm_extractor_with_mock(monkeypatch):
     
     assert result.extractor_type == "llm"
     assert result.provider == "mock"
-    assert result.prompt_version == "v1.1"
+    assert result.prompt_version == CLINICAL_EXTRACTION_PROMPT_VERSION
     assert len(result.fields) == 3
     
     patient_name = next(f for f in result.fields if f.field_name == "patient_name")

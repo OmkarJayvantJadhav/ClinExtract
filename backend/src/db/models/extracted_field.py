@@ -11,6 +11,9 @@ class ExtractedField(BaseModel):
     field_name: Mapped[str] = mapped_column(String)
     value: Mapped[str] = mapped_column(String, nullable=True)
     unit: Mapped[str] = mapped_column(String, nullable=True)
+    # The report's own reference range and abnormal flag for this result, as printed
+    reference_range: Mapped[str] = mapped_column(String, nullable=True)
+    abnormal_flag: Mapped[str] = mapped_column(String(8), nullable=True)
     
     # Phase 9 fields
     normalized_value: Mapped[str] = mapped_column(String, nullable=True)

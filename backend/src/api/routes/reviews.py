@@ -180,7 +180,9 @@ async def complete_review(
     for field in extraction.extracted_fields:
         if field.field_name not in VALIDATED_FIELDS:
             continue
-        results[field.id] = engine.validate_field(field.field_name, current_values[field.id], field.unit, context)
+        results[field.id] = engine.validate_field(
+            field.field_name, current_values[field.id], field.unit, context, field.reference_range, field.abnormal_flag
+        )
 
     inconsistencies = engine.check_cross_field(
         (fields_by_id[fid].field_name, res[0], res[3]) for fid, res in results.items()

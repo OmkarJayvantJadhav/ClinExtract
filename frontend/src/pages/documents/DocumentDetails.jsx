@@ -52,7 +52,7 @@ export function DocumentDetails() {
         .map(f => ({ id: f.id, name: f.field_name.replace(/_/g, ' '), value: f.current_value, corrected: f.is_corrected, state: f.validation_state, message: f.validation_messages?.[0] })),
       laboratoryResults: extraction.extracted_fields
         .filter(f => !patientFields.includes(f.field_name) && !specimenFields.includes(f.field_name))
-        .map(f => ({ id: f.id, name: f.field_name.replace(/_/g, ' '), value: f.current_value, unit: f.unit || '', corrected: f.is_corrected, state: f.validation_state, message: f.validation_messages?.[0] }))
+        .map(f => ({ id: f.id, name: f.field_name.replace(/_/g, ' '), value: f.current_value, unit: f.unit || '', referenceRange: f.reference_range, abnormalFlag: f.abnormal_flag, corrected: f.is_corrected, state: f.validation_state, message: f.validation_messages?.[0] }))
     };
   }
 
@@ -184,7 +184,12 @@ export function DocumentDetails() {
                           <div key={field.id} className="p-2 rounded bg-muted/30">
                             <div className="flex justify-between">
                               <dt className="text-muted-foreground">{field.name}</dt>
-                              <dd className="font-medium">{field.value ?? '—'} {field.unit}{field.corrected && <span className="ml-1 text-[10px] text-primary">(corrected)</span>}</dd>
+                              <dd className="font-medium text-right">
+                                {field.value ?? '—'} {field.unit}
+                                {field.abnormalFlag && <span className="ml-1 text-xs font-semibold text-warning-foreground">{field.abnormalFlag}</span>}
+                                {field.corrected && <span className="ml-1 text-[10px] text-primary">(corrected)</span>}
+                                {field.referenceRange && <span className="block text-[11px] font-normal text-muted-foreground">ref {field.referenceRange}</span>}
+                              </dd>
                             </div>
                             {/* Abnormal results can be auto-accepted, so the flag must stay visible on the record */}
                             <ValidationBadge state={field.state} message={field.message} />

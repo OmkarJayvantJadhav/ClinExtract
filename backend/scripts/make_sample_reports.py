@@ -28,12 +28,26 @@ NORMAL = {
     ],
 }
 
+# Labs print sex-specific ranges for these tests
+FEMALE_RANGES = {"Hemoglobin": "12.0 - 15.5", "Hematocrit": "36 - 44"}
+
 def _with(base: dict, **changes) -> dict:
     report = {**base, **{k: v for k, v in changes.items() if k != "results"}}
-    if "results" in changes:
-        overrides = changes["results"]
-        report["results"] = [(t, overrides.get(t, v), u, r) for t, v, u, r in base["results"]]
+    overrides = changes.get("results", {})
+    female = report["sex"] == "Female"
+    report["results"] = [
+        (t, overrides.get(t, v), u, FEMALE_RANGES.get(t, r) if female else r) for t, v, u, r in base["results"]
+    ]
     return report
+
+def _flag(value: str, ref: str) -> str:
+    """H or L, as a lab prints it, when the value lies outside the printed range."""
+    try:
+        lower, upper = (float(x) for x in ref.split(" - "))
+        number = float(value)
+    except ValueError:
+        return ""
+    return "H" if number > upper else "L" if number < lower else ""
 
 def _draw_report(page: fitz.Page, report: dict, results_as_image: bool = False) -> None:
     y = 60
@@ -68,14 +82,15 @@ def _draw_report(page: fitz.Page, report: dict, results_as_image: bool = False) 
     page.insert_text((50, 780), FOOTER, fontsize=8)
 
 def _draw_results(page: fitz.Page, results, y: float) -> None:
-    columns = (0, 210, 280, 370)
-    for x, title in zip(columns, ("Test", "Result", "Unit", "Reference Range")):
+    columns = (0, 200, 255, 295, 385)
+    for x, title in zip(columns, ("Test", "Result", "Flag", "Unit", "Reference Range")):
         page.insert_text((50 + x, y), title, fontsize=11)
     page.draw_line((50, y + 6), (560, y + 6))
     for test, value, unit, ref in results:
         y += 22
-        for x, text in zip(columns, (test, value, unit, ref)):
-            page.insert_text((50 + x, y), text, fontsize=11)
+        for x, text in zip(columns, (test, value, _flag(value, ref), unit, ref)):
+            if text:
+                page.insert_text((50 + x, y), text, fontsize=11)
 
 def _pdf(report: dict, results_as_image: bool = False) -> bytes:
     doc = fitz.open()
@@ -85,13 +100,13 @@ def _pdf(report: dict, results_as_image: bool = False) -> bytes:
 def _scanned_jpeg(report: dict) -> bytes:
     """Rendered page, slightly rotated and noisy, as a phone or flatbed scan would be."""
     doc = fitz.open(stream=_pdf(report), filetype="pdf")
-    pix = doc[0].get_pixmap(dpi=200)
+    pix = doc[0].get_pixmap(dpi=300)
     img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     h, w = img.shape[:2]
     rotation = cv2.getRotationMatrix2D((w / 2, h / 2), 1.2, 1.0)
     img = cv2.warpAffine(img, rotation, (w, h), borderValue=(245, 245, 240))
-    noise = np.random.default_rng(7).normal(0, 6, img.shape)
+    noise = np.random.default_rng(7).normal(0, 4, img.shape)
     img = np.clip(img.astype(np.float64) * 0.96 + 8 + noise, 0, 255).astype(np.uint8)
     return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
 
@@ -106,7 +121,8 @@ SAMPLES = {
         "AUTO_ACCEPTED",
         "Abnormal results: flagged on the record but, by default, not held for review."),
     "03_scanned_report.jpg": (
-        lambda: _scanned_jpeg(_with(NORMAL, name="Arjun Desai", patient_id="MRN-118734", dob="1990-07-21")),
+        lambda: _scanned_jpeg(_with(NORMAL, name="Arjun Desai", patient_id="MRN-118734", dob="1990-07-21",
+                                    results={"White Blood Cell Count": "6.8"})),
         None,  # depends on OCR confidence
         "Scanned image: deskewed and read with OCR."),
     "04_needs_correction.pdf": (

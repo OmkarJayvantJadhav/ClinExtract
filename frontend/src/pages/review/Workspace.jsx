@@ -21,6 +21,8 @@ function toPanelField(f) {
     value: f.current_value,
     original_value: f.original_value,
     unit: f.unit || '',
+    referenceRange: f.reference_range,
+    abnormalFlag: f.abnormal_flag,
     state: f.validation_state,
     validationMessage: (f.validation_messages || []).join('; '),
     confidence: f.confidence,

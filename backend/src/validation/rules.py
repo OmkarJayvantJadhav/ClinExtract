@@ -60,9 +60,42 @@ def _format_number(num: float) -> str:
     num = round(num, 3)
     return str(int(num)) if float(num).is_integer() else str(num)
 
+_RANGE_PAIR = re.compile(r"(-?[\d,]*\.?\d+)\s*(?:-|\u2013|to)\s*(-?[\d,]*\.?\d+)", re.IGNORECASE)
+_RANGE_BOUND = re.compile(r"(<=?|>=?|\u2264|\u2265)\s*([\d,]*\.?\d+)")
+
+def parse_printed_range(text: Optional[str]) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    """(lower, upper) from a printed range such as "70 - 100", "<200" or ">= 60"; None if unreadable."""
+    if not text:
+        return None
+    pair = _RANGE_PAIR.search(text)
+    if pair:
+        lower, upper = (float(n.replace(",", "")) for n in pair.groups())
+        return (lower, upper) if lower <= upper else None
+    bound = _RANGE_BOUND.search(text)
+    if bound:
+        op, number = bound.groups()
+        limit = float(number.replace(",", ""))
+        return (None, limit) if op in ("<", "<=", "\u2264") else (limit, None)
+    return None
+
+def normalize_flag(flag: Optional[str]) -> Optional[str]:
+    """"H"/"L" for a printed high/low flag (HH/LL/High/Low included), else None."""
+    f = (flag or "").strip().upper()
+    if f in ("H", "HH", "HIGH"):
+        return "H"
+    if f in ("L", "LL", "LOW"):
+        return "L"
+    return None
+
 def validate_numeric_and_range(
-    field_name: str, val: str, unit: Optional[str] = None, sex: Optional[str] = None, age: Optional[int] = None
+    field_name: str, val: str, unit: Optional[str] = None, sex: Optional[str] = None, age: Optional[int] = None,
+    printed_range: Optional[str] = None, printed_flag: Optional[str] = None,
 ) -> Tuple[str, Optional[str], Optional[Dict]]:
+    """
+    Normalizes the value to the analyte's canonical unit and checks it against a reference range:
+    the report's own printed range when there is one (it already fits the patient and the lab's
+    method), otherwise the built-in adult range. A printed H/L flag also marks the value abnormal.
+    """
     num = normalize_numeric(val)
     if num is None:
         return "INVALID_FORMAT", None, None
@@ -71,6 +104,8 @@ def validate_numeric_and_range(
     meta: Dict = {}
     conversions = UNIT_CONVERSIONS.get(field_name, {})
     norm_unit = normalize_unit(unit)
+    # Multiplier taking the printed value (and its printed range, same row) to the canonical unit
+    scale = 1.0
 
     if norm_unit:
         factor = conversions.get(norm_unit)
@@ -82,10 +117,12 @@ def validate_numeric_and_range(
             meta["original_value"] = num
             meta["original_unit"] = unit
             num = num * factor
+            scale = factor
     elif field_name in COUNT_FIELDS and num >= RAW_COUNT_THRESHOLD:
         meta["original_value"] = num
         meta["assumed_unit"] = "cells/uL"
         num = num / 1000.0
+        scale = 0.001
 
     norm_str = _format_number(num)
 
@@ -95,13 +132,24 @@ def validate_numeric_and_range(
         if limits and not (limits[0] <= num <= limits[1]):
             meta.update({"value": round(num, 3), "plausible_lower": limits[0], "plausible_upper": limits[1]})
             return "EXTREME_VALUE", norm_str, meta
-        ref = get_reference_range(field_name, sex, age)
-        if ref is None:
-            meta["reason"] = f"no adult reference range applies (age {age})"
-            return "NO_REFERENCE_RANGE", norm_str, meta
-        lower, upper, basis = ref
+        printed = parse_printed_range(printed_range)
+        if printed:
+            lower, upper = (None if b is None else round(b * scale, 3) for b in printed)
+            basis = "report"
+            meta["printed_range"] = printed_range
+        else:
+            ref = get_reference_range(field_name, sex, age)
+            if ref is None:
+                meta["reason"] = f"no adult reference range applies (age {age})"
+                return "NO_REFERENCE_RANGE", norm_str, meta
+            lower, upper, basis = ref
         meta["range_basis"] = basis
-        if num < lower or num > upper:
+
+        outside = (lower is not None and num < lower) or (upper is not None and num > upper)
+        flag = normalize_flag(printed_flag)
+        if flag:
+            meta["printed_flag"] = flag
+        if outside or flag:
             meta.update({"value": round(num, 3), "lower": lower, "upper": upper})
             return "OUTSIDE_REFERENCE_RANGE", norm_str, meta
 

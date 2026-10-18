@@ -9,6 +9,8 @@ class ExtractedFieldResponse(BaseModel):
     field_name: str
     value: Optional[str]
     unit: Optional[str] = None
+    reference_range: Optional[str] = None
+    abnormal_flag: Optional[str] = None
     original_value: Optional[str] = None
     current_value: Optional[str] = None
     is_corrected: bool = False
