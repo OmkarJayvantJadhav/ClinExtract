@@ -40,9 +40,10 @@ def _matches(field_name: str, found: Optional[str], expected: str) -> bool:
     return found.strip().lower() == expected.strip().lower()
 
 
-def run_case(case: Case, engine: Optional[ValidationEngine] = None) -> CaseResult:
+def run_case(case: Case, engine: Optional[ValidationEngine] = None, extractor=None) -> CaseResult:
     artifact = DocumentAnalyzer.process(case.data, case.mime, "eval", "eval")
-    result = RuleBasedExtractor().extract(artifact)
+    # The vision extractor reads the page images, the others the OCR/native text
+    result = (extractor or RuleBasedExtractor()).extract(artifact, metadata={"image_bytes": case.data})
     extraction = Extraction(id=uuid.uuid4(), model_version="eval", provider="eval", prompt_version="eval")
     extraction.extracted_fields = [
         ExtractedField(field_name=f.field_name, value=f.value, unit=f.unit, confidence=f.confidence,
@@ -122,5 +123,5 @@ class Report:
         return "\n".join(lines)
 
 
-def evaluate(cases: List[Case]) -> Report:
-    return Report([run_case(c) for c in cases])
+def evaluate(cases: List[Case], extractor=None) -> Report:
+    return Report([run_case(c, extractor=extractor) for c in cases])
