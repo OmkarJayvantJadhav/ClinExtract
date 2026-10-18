@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DocumentStatusBadge } from '@/components/common/StatusPrimitives';
 import { EmptyState, ErrorState } from '@/components/common/FeedbackStates';
-import { Edit, Clock, PlayCircle, Loader2 } from 'lucide-react';
+import { Edit, Clock, PlayCircle, Loader2, AlertCircle } from 'lucide-react';
 
 import { useQuery } from '@tanstack/react-query';
 import { fetchApi } from '@/services/apiClient';
@@ -24,8 +24,9 @@ const QUEUE_PAGE_SIZE = 100;
 function useDocumentsByStatus(status) {
   return useQuery({
     queryKey: ['documents', { status }],
-    // Oldest first from the server, so the longest-waiting documents are never cut off by the page size
-    queryFn: () => fetchApi(`/documents?status=${status}&sort=oldest&size=${QUEUE_PAGE_SIZE}`),
+    // Ordered by the server (possible misreads and critical results first, then oldest), so the
+    // documents that matter most are never cut off by the page size
+    queryFn: () => fetchApi(`/documents?status=${status}&sort=priority&size=${QUEUE_PAGE_SIZE}`),
     refetchInterval: 10000
   });
 }
@@ -50,13 +51,13 @@ export function ReviewQueue() {
   const current = tab === 'in-progress' ? inProgress.data : pending.data;
   const docsToDisplay = current?.items || [];
   const hiddenCount = Math.max(0, (current?.total ?? 0) - docsToDisplay.length);
-  const oldest = pendingDocs[0];
+  const oldest = pendingDocs.reduce((a, d) => (!a || d.created_at < a.created_at ? d : a), null);
 
   return (
     <div className="flex flex-col gap-6 w-full h-full">
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Review Queue</h1>
-        <p className="text-muted-foreground">Documents requiring human validation, oldest first.</p>
+        <p className="text-muted-foreground">Documents requiring human validation: possible misreads and critical results first, then oldest.</p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -120,7 +121,15 @@ export function ReviewQueue() {
                   {docsToDisplay.map((doc) => (
                     <TableRow key={doc.id}>
                       <TableCell>
-                        <div className="font-medium">{doc.filename}</div>
+                        <div className="font-medium flex items-center gap-2">
+                          {doc.filename}
+                          {doc.needs_attention && (
+                            <span className="inline-flex items-center gap-1 rounded border border-destructive/20 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium uppercase text-destructive"
+                              title="A result may be misread or critical">
+                              <AlertCircle className="h-3 w-3" /> Check first
+                            </span>
+                          )}
+                        </div>
                         <div className="text-xs text-muted-foreground font-mono">{doc.id}</div>
                       </TableCell>
                       <TableCell><DocumentStatusBadge status={doc.status} /></TableCell>
@@ -137,7 +146,7 @@ export function ReviewQueue() {
             )}
             {hiddenCount > 0 && (
               <p className="p-4 text-sm text-muted-foreground border-t">
-                Showing the {docsToDisplay.length} oldest. {hiddenCount} newer document{hiddenCount === 1 ? '' : 's'} will appear as these are reviewed.
+                Showing the first {docsToDisplay.length}. {hiddenCount} more document{hiddenCount === 1 ? '' : 's'} will appear as these are reviewed.
               </p>
             )}
           </TabsContent>

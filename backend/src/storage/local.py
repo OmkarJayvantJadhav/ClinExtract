@@ -77,6 +77,30 @@ class LocalVolumeStorage(StorageBackend):
         async with aiofiles.open(file_path, 'rb') as f:
             return self._decrypt(await f.read()).decode("utf-8")
 
+    async def upload_binary_artifact(self, key: str, data: bytes) -> str:
+        os.makedirs(self.artifacts_dir, exist_ok=True)
+        file_path = self._safe_path(key, self.artifacts_dir)
+        await self._atomic_write(file_path, self._encrypt(data))
+        return file_path
+
+    async def get_binary_artifact(self, key: str) -> bytes:
+        file_path = self._safe_path(key, self.artifacts_dir)
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Artifact {key} not found")
+        async with aiofiles.open(file_path, 'rb') as f:
+            return self._decrypt(await f.read())
+
+    async def delete_artifacts_with_prefix(self, prefix: str) -> int:
+        self._safe_path(prefix, self.artifacts_dir)  # validates the prefix like a key
+        if not os.path.isdir(self.artifacts_dir):
+            return 0
+        removed = 0
+        for name in os.listdir(self.artifacts_dir):
+            if name.startswith(prefix):
+                os.remove(os.path.join(self.artifacts_dir, name))
+                removed += 1
+        return removed
+
     async def get_file(self, key: str) -> typing.BinaryIO:
         file_path = self._safe_path(key)
         if not os.path.exists(file_path):

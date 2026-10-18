@@ -135,6 +135,16 @@ async def process_document_async(job_id: str, attempt: int = 1, session_maker: O
     artifact = DocumentAnalyzer.process(file_bytes, mime_type, doc_id_str, str(job_uuid))
     await storage.store_artifact(storage_key, json.dumps(artifact, indent=2))
 
+    # Pre-render the review viewer's page images so opening a document doesn't re-render the
+    # PDF on every view. Not essential: the viewer renders missing pages on demand.
+    if mime_type == "application/pdf":
+        from src.processing.page_images import render_pdf_pages
+        try:
+            for page_number, png in render_pdf_pages(file_bytes):
+                await storage.store_page_image(storage_key, page_number, png)
+        except Exception as e:
+            logger.warning(f"Could not pre-render page images: {e}")
+
     # 3. Transaction B: extraction + validation + final statuses, committed atomically.
     # A failure anywhere here rolls everything back, so a retry starts clean.
     from src.validation.engine import ValidationEngine

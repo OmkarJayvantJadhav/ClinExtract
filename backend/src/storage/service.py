@@ -82,7 +82,19 @@ class StorageService:
     def artifact_key(storage_key: str) -> str:
         return f"{storage_key}_ocr.json"
 
+    @staticmethod
+    def page_image_key(storage_key: str, page_number: int) -> str:
+        return f"{storage_key}_page{page_number}.png"
+
+    async def store_page_image(self, storage_key: str, page_number: int, png: bytes) -> None:
+        await self.backend.upload_binary_artifact(self.page_image_key(storage_key, page_number), png)
+
+    async def get_page_image(self, storage_key: str, page_number: int) -> bytes:
+        """Raises FileNotFoundError when the page has not been rendered yet."""
+        return await self.backend.get_binary_artifact(self.page_image_key(storage_key, page_number))
+
     async def delete_document_files(self, storage_key: str) -> None:
-        """Removes the stored document and its OCR artifact (missing files are ignored)."""
+        """Removes the stored document, its OCR artifact and rendered pages (missing files are ignored)."""
         await self.backend.delete_file(storage_key)
         await self.backend.delete_artifact(self.artifact_key(storage_key))
+        await self.backend.delete_artifacts_with_prefix(f"{storage_key}_page")

@@ -260,3 +260,68 @@ def test_demo_accounts(admin, monkeypatch):
     assert r.status_code == 403
     assert demo.post("/api/v1/auth/logout-all").status_code == 403
     assert demo.get("/api/v1/auth/me").status_code == 200
+
+
+# --- review speed: stored page images, priority order, claim keep-alive -----------
+
+def test_page_images_are_stored_served_and_deleted(admin):
+    from src.storage import get_storage_service
+    storage = get_storage_service()
+    tag = uuid.uuid4().hex[:8]
+    r = admin.post("/api/v1/documents", files={"file": (f"pages_{tag}.pdf", io.BytesIO(_pdf(f"Patient Name: P {tag}")), "application/pdf")})
+    doc_id = r.json()["id"]
+    admin.get(f"/api/v1/documents/{doc_id}")  # processed eagerly in tests
+    from sqlalchemy import create_engine, text
+    from src.core.config import settings
+    engine = create_engine(settings.DATABASE_URL)
+    with engine.connect() as conn:
+        storage_key = conn.execute(text("select storage_key from documents where id = :i"), {"i": doc_id}).scalar_one()
+    engine.dispose()
+
+    # Rendered during processing, and served as-is
+    stored = os.path.join(storage.backend.artifacts_dir, storage.page_image_key(storage_key, 1))
+    assert os.path.exists(stored)
+    page = admin.get(f"/api/v1/documents/{doc_id}/pages/1/image")
+    assert page.status_code == 200 and page.content[:4] == b"\x89PNG"
+    assert admin.get(f"/api/v1/documents/{doc_id}/pages").json() == {"page_count": 1}
+    assert admin.get(f"/api/v1/documents/{doc_id}/pages/2/image").status_code == 404
+
+    # Removed with the document
+    assert admin.delete(f"/api/v1/documents/{doc_id}", params={"reason": "test cleanup"}).status_code == 204
+    assert not os.path.exists(stored)
+
+
+def _report_pdf(lines):
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page()
+    for i, line in enumerate(lines):
+        page.insert_text(fitz.Point(50, 50 + 18 * i), line, fontsize=11)
+    return doc.write()
+
+def test_priority_sort_puts_possible_misreads_first(admin):
+    tag = uuid.uuid4().hex[:8]
+    fields = [f"Patient Name: Q{tag}", f"Patient ID: Z-{tag}", "DOB: 1990-01-01", "Specimen Type: Blood",
+              "Collection Date: 2026-01-02", "Received Date: 2026-01-03", "Glucose: 92 mg/dL"]
+    def upload(name, hemoglobin):
+        pdf = _report_pdf(fields + [f"Hemoglobin: {hemoglobin} g/dL"])
+        return admin.post("/api/v1/documents", files={"file": (name, io.BytesIO(pdf), "application/pdf")}).json()["id"]
+    normal = upload(f"prio_{tag}_a.pdf", "14.5")
+    misread = upload(f"prio_{tag}_b.pdf", "1.45")
+    items = admin.get("/api/v1/documents", params={"q": f"prio_{tag}", "sort": "priority"}).json()["items"]
+    assert [d["id"] for d in items] == [misread, normal]
+    assert [d["needs_attention"] for d in items] == [True, False]
+
+
+def test_review_heartbeat_keeps_the_claim(admin, new_user):
+    tag = uuid.uuid4().hex[:8]
+    doc_id = admin.post("/api/v1/documents", files={"file": (f"hb_{tag}.pdf", io.BytesIO(_pdf("Patient Name: Missing Fields")), "application/pdf")}).json()["id"]
+    assert admin.get(f"/api/v1/documents/{doc_id}").json()["status"] == "REVIEW_REQUIRED"
+    assert admin.post(f"/api/v1/reviews/{doc_id}/heartbeat").status_code == 404  # nothing claimed yet
+    review = admin.post(f"/api/v1/reviews/{doc_id}/claim").json()
+    r = admin.post(f"/api/v1/reviews/{doc_id}/heartbeat")
+    assert r.status_code == 200 and r.json()["id"] == review["id"]
+    # Another user cannot keep someone else's claim alive
+    other, _ = login(new_user["username"], STRONG)
+    assert other.post(f"/api/v1/reviews/{doc_id}/heartbeat").status_code in (403, 404)
+    admin.post(f"/api/v1/reviews/{doc_id}/release")

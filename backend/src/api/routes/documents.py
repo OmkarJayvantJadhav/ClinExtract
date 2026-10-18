@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -31,7 +32,8 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 ALL_ROLES = [UserRole.ADMIN, UserRole.OPERATOR, UserRole.REVIEWER, UserRole.VIEWER]
-PAGE_RENDER_DPI = 150
+# Results that may be misread or critical: reviewed first under sort=priority
+ATTENTION_STATES = ("EXTREME_VALUE", "FLAG_MISMATCH", "POSSIBLE_MISREAD")
 
 def _list_item(doc: Document) -> DocumentListItem:
     item = DocumentListItem.model_validate(doc)
@@ -42,6 +44,7 @@ def _list_item(doc: Document) -> DocumentListItem:
         values = {f.field_name: f.current_value for f in extraction.extracted_fields}
         item.patient_name = values.get("patient_name")
         item.patient_id = values.get("patient_id")
+        item.needs_attention = any(f.validation_state in ATTENTION_STATES for f in extraction.extracted_fields)
     return item
 
 async def _log_access(db: AsyncSession, action: str, document_id: uuid.UUID, user: User, correlation_id=None) -> None:
@@ -69,6 +72,15 @@ def _like(term: str) -> str:
     escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
 
+def _needs_attention():
+    """EXISTS clause: the document's extraction has a result that may be misread or critical."""
+    return (
+        select(ExtractedField.id)
+        .join(Extraction, Extraction.id == ExtractedField.extraction_id)
+        .where(Extraction.document_id == Document.id, ExtractedField.validation_state.in_(ATTENTION_STATES))
+        .exists()
+    )
+
 def _patient_match(term: str):
     """EXISTS clause: the current extraction's patient name/id (original or corrected) contains `term`."""
     like = _like(term)
@@ -88,20 +100,27 @@ def _patient_match(term: str):
         .exists()
     )
 
+def _ordering(sort: str) -> list:
+    if sort == "priority":
+        return [_needs_attention().desc(), Document.created_at.asc()]
+    return [Document.created_at.asc() if sort == "oldest" else Document.created_at.desc()]
+
 @router.get("", response_model=PaginatedDocumentResponse)
 async def list_documents(
     status: list[DocumentStatus] | None = Query(None, description="Filter by one or more statuses"),
     q: str | None = Query(None, max_length=200, description="Search filename, patient name or patient ID"),
     created_from: datetime | None = Query(None, description="Uploaded at or after (ISO 8601)"),
     created_to: datetime | None = Query(None, description="Uploaded before (ISO 8601)"),
-    sort: Literal["newest", "oldest"] = Query("newest", description="Order by upload time"),
+    sort: Literal["newest", "oldest", "priority"] = Query(
+        "newest", description="newest/oldest by upload time; priority: possible misreads and critical results first, then oldest"
+    ),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles(ALL_ROLES))
 ) -> Any:
     """
-    Get paginated list of documents (newest first unless sort=oldest), with optional search and filters.
+    Get paginated list of documents with optional search and filters.
     """
     query = select(Document)
     if status:
@@ -117,7 +136,7 @@ async def list_documents(
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
 
     query = (
-        query.order_by(Document.created_at.asc() if sort == "oldest" else Document.created_at.desc(), Document.id)
+        query.order_by(*_ordering(sort), Document.id)
         .offset((page - 1) * size)
         .limit(size)
         .options(selectinload(Document.extractions).selectinload(Extraction.extracted_fields).selectinload(ExtractedField.field_corrections))
@@ -337,14 +356,21 @@ async def get_document_page_image(
     storage: StorageService = Depends(get_storage_service)
 ):
     """
-    Render one page of the original document as PNG (1-based page number), in the same
-    coordinate frame as the extracted bounding boxes, for the review viewer.
+    One page of the original document as PNG (1-based page number), in the same coordinate
+    frame as the extracted bounding boxes, for the review viewer. PDF pages are rendered once
+    (during processing, or on first view for older documents) and served from storage.
     """
     doc = await _get_document_or_404(db, document_id)
+    headers = {"Cache-Control": "private, no-store"}
+    try:
+        png = await storage.get_page_image(doc.storage_key, page_number)
+        return Response(content=png, media_type="image/png", headers=headers)
+    except FileNotFoundError:
+        pass
+
     data = await _read_document_bytes(storage, doc)
     kind = filetype.guess(data)
     mime = kind.mime if kind else None
-    headers = {"Cache-Control": "private, no-store"}
 
     if mime in ("image/png", "image/jpeg"):
         if page_number != 1:
@@ -353,6 +379,7 @@ async def get_document_page_image(
 
     if mime == "application/pdf":
         import fitz
+        from src.processing.page_images import render_pdf_page
         try:
             pdf = fitz.open(stream=data, filetype="pdf")
         except Exception:
@@ -360,11 +387,10 @@ async def get_document_page_image(
         try:
             if page_number < 1 or page_number > pdf.page_count:
                 raise HTTPException(status_code=404, detail="Page not found")
-            zoom = PAGE_RENDER_DPI / 72.0
-            pix = pdf[page_number - 1].get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-            png = pix.tobytes("png")
+            png = render_pdf_page(pdf, page_number)
         finally:
             pdf.close()
+        await storage.store_page_image(doc.storage_key, page_number, png)
         return Response(content=png, media_type="image/png", headers=headers)
 
     raise HTTPException(status_code=415, detail="Unsupported document type")
@@ -378,6 +404,13 @@ async def get_document_page_count(
 ):
     """Number of renderable pages for the review viewer."""
     doc = await _get_document_or_404(db, document_id)
+    # The processing artifact already lists the pages; avoid decrypting the whole document
+    try:
+        artifact = json.loads(await storage.backend.get_artifact(storage.artifact_key(doc.storage_key)))
+        if artifact.get("pages"):
+            return {"page_count": len(artifact["pages"])}
+    except (FileNotFoundError, ValueError):
+        pass
     data = await _read_document_bytes(storage, doc)
     kind = filetype.guess(data)
     if kind and kind.mime == "application/pdf":

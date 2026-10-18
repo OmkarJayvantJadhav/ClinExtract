@@ -1,29 +1,55 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Check, X, RotateCcw } from 'lucide-react';
 import { ValidationBadge } from '@/components/common/StatusPrimitives';
 
-export function EditableField({ field, currentValue, isCorrected, onSelect, onEdit }) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [tempValue, setTempValue] = useState(currentValue);
+// Mounted only while editing, so it always starts from the field's current value
+function FieldEditor({ initialValue, onSave, onCancel }) {
+  const [tempValue, setTempValue] = useState(initialValue);
+  return (
+    <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+      <Input
+        autoFocus
+        className="h-8 text-sm font-mono border-primary shadow-sm"
+        value={tempValue ?? ''}
+        onChange={(e) => setTempValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') onSave(tempValue);
+          if (e.key === 'Escape') onCancel();
+        }}
+      />
+      <Button size="icon" variant="ghost" className="h-8 w-8 text-success hover:text-success hover:bg-success/10" onClick={() => onSave(tempValue)}>
+        <Check className="h-4 w-4" />
+      </Button>
+      <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" onClick={onCancel}>
+        <X className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
 
-  const handleSave = () => {
+export function EditableField({ field, currentValue, isCorrected, isActive, isEditing, onEditingChange, onSelect, onEdit }) {
+  const ref = useRef(null);
+
+  // Keep the field selected from the keyboard in view
+  useEffect(() => {
+    if (isActive) ref.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [isActive]);
+
+  const handleSave = (tempValue) => {
     const original = field.value ?? '';
     if ((tempValue ?? '') !== original) {
       onEdit(tempValue);
     } else {
       // Reverted to original
-      onEdit(undefined); 
+      onEdit(undefined);
     }
-    setIsEditing(false);
+    onEditingChange(false);
   };
 
-  const handleCancel = () => {
-    setTempValue(currentValue);
-    setIsEditing(false);
-  };
+  const handleCancel = () => onEditingChange(false);
 
   const handleRevert = (e) => {
     e.stopPropagation();
@@ -35,10 +61,12 @@ export function EditableField({ field, currentValue, isCorrected, onSelect, onEd
   const displayState = isCorrected ? 'CORRECTED' : field.state;
 
   return (
-    <div 
+    <div
+      ref={ref}
       className={cn(
         "group flex flex-col py-2 px-3 border-b border-border/50 hover:bg-muted/30 cursor-pointer transition-colors relative",
-        isCorrected && "bg-primary/5"
+        isCorrected && "bg-primary/5",
+        isActive && "ring-2 ring-inset ring-primary/40"
       )}
       onClick={() => { if (!isEditing) onSelect(); }}
     >
@@ -62,31 +90,14 @@ export function EditableField({ field, currentValue, isCorrected, onSelect, onEd
 
       <div className="mt-1">
         {isEditing ? (
-          <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-            <Input 
-              autoFocus
-              className="h-8 text-sm font-mono border-primary shadow-sm"
-              value={tempValue ?? ''}
-              onChange={(e) => setTempValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSave();
-                if (e.key === 'Escape') handleCancel();
-              }}
-            />
-            <Button size="icon" variant="ghost" className="h-8 w-8 text-success hover:text-success hover:bg-success/10" onClick={handleSave}>
-              <Check className="h-4 w-4" />
-            </Button>
-            <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" onClick={handleCancel}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
+          <FieldEditor initialValue={currentValue} onSave={handleSave} onCancel={handleCancel} />
         ) : (
           <div 
             className="flex items-center justify-between min-h-[28px]"
             onDoubleClick={(e) => {
               e.stopPropagation();
-              setTempValue(currentValue);
-              setIsEditing(true);
+              onSelect();
+              onEditingChange(true);
             }}
           >
             <div className="flex items-baseline gap-1.5">

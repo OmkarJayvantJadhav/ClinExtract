@@ -70,6 +70,8 @@ class DocumentListItem(DocumentResponse):
     overall_confidence: Optional[float] = None  # percentage
     patient_name: Optional[str] = None
     patient_id: Optional[str] = None
+    # A result that may be misread or critical (EXTREME_VALUE, FLAG_MISMATCH, POSSIBLE_MISREAD)
+    needs_attention: bool = False
 
 class DocumentDetailResponse(DocumentResponse):
     extractions: List[ExtractionResponse] = []

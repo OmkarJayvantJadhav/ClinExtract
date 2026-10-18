@@ -279,6 +279,23 @@ async def release_review(
     await db.commit()
     return await _load_review(db, review.id)
 
+@router.post("/{document_id}/heartbeat", response_model=ReviewResponse)
+async def review_heartbeat(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(REVIEW_ROLES))
+):
+    """
+    Keeps the current reviewer's claim alive while the review screen is open, so a long review
+    is not treated as abandoned after REVIEW_CLAIM_TIMEOUT_MINUTES.
+    """
+    review = await _active_review(db, document_id)
+    if not review or review.reviewer_id != current_user.id:
+        raise HTTPException(status_code=404, detail="You have no active review of this document")
+    review.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return await _load_review(db, review.id)
+
 @router.get("/{document_id}", response_model=ReviewResponse)
 async def get_review(
     document_id: uuid.UUID,

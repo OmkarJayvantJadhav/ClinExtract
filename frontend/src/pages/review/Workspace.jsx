@@ -31,6 +31,21 @@ function toPanelField(f) {
   };
 }
 
+// Keeps the review claim alive while the workspace is open (claims expire after inactivity)
+const HEARTBEAT_MS = 5 * 60 * 1000;
+
+const SHORTCUTS = 'j/k next/previous field · n next issue · e edit · a approve · r reject';
+
+async function nextReviewPath(currentId) {
+  try {
+    const data = await fetchApi('/documents?status=REVIEW_REQUIRED&sort=priority&size=2');
+    const next = data.items.find(d => d.id !== currentId);
+    return next ? `/review/workspace/${next.id}` : '/review';
+  } catch {
+    return '/review';
+  }
+}
+
 function formatErrorDetail(error) {
   const detail = error?.detail;
   if (detail?.fields?.length) {
@@ -41,6 +56,12 @@ function formatErrorDetail(error) {
 
 export function Workspace() {
   const { id } = useParams();
+  // A fresh workspace per document (its own claim, corrections and selection), also when
+  // moving straight to the next document after a decision.
+  return <ReviewWorkspace key={id} id={id} />;
+}
+
+function ReviewWorkspace({ id }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { hasRole } = useAuth();
@@ -75,9 +96,10 @@ export function Workspace() {
       method: 'POST',
       body: JSON.stringify(data)
     }),
-    onSuccess: () => {
+    onSuccess: async () => {
       invalidateDocument();
-      navigate('/review');
+      // Straight on to the next document waiting for review
+      navigate(await nextReviewPath(id));
     },
   });
 
@@ -109,17 +131,76 @@ export function Workspace() {
     [extraction]
   );
 
-  const [activeField, setActiveField] = useState(null);
+  const [activeFieldId, setActiveFieldId] = useState(null);
+  const [editingFieldId, setEditingFieldId] = useState(null);
   const [corrections, setCorrections] = useState({});
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogType, setDialogType] = useState('APPROVE');
 
-  // Until the reviewer picks a field, highlight the first field with an issue (or the first field)
-  const defaultField = useMemo(() => {
-    const first = allFields.find(f => f.state !== 'VALID' && f.bbox) || allFields.find(f => f.bbox);
-    return first ? { page_num: first.page_num, bbox: first.bbox } : null;
+  // Until the reviewer picks a field, select the first field with an issue (or the first field)
+  const defaultFieldId = useMemo(() => {
+    const first = allFields.find(f => f.state !== 'VALID' && f.bbox) || allFields.find(f => f.bbox) || allFields[0];
+    return first?.id ?? null;
   }, [allFields]);
-  const selectedField = activeField ?? defaultField;
+  const selectedId = activeFieldId ?? defaultFieldId;
+  const selected = allFields.find(f => f.id === selectedId);
+  const selectedField = selected ? { page_num: selected.page_num, bbox: selected.bbox } : null;
+
+  const reviewId = claimMutation.data?.id;
+  const isReadOnly = !canReview || (!CLAIMABLE_STATUSES.includes(doc?.status) && !reviewId);
+
+  // Only unusable values block approval; abnormal results (e.g. outside reference range)
+  // are confirmed explicitly in the approval dialog.
+  const unresolvedIssues = allFields.filter(f => BLOCKING_STATES.includes(f.state) && corrections[f.id] === undefined);
+  const hasUnresolvedIssues = unresolvedIssues.length > 0;
+  const canReject = !isReadOnly && Boolean(reviewId) && !completeMutation.isPending;
+  const canApprove = canReject && !hasUnresolvedIssues;
+
+  const handleDecision = (type) => {
+    completeMutation.reset();
+    setDialogType(type);
+    setDialogOpen(true);
+  };
+
+  useEffect(() => {
+    if (!reviewId) return undefined;
+    const timer = setInterval(() => {
+      fetchApi(`/reviews/${id}/heartbeat`, { method: 'POST' }).catch(() => {});
+    }, HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, [reviewId, id]);
+
+  // Keyboard shortcuts (ignored while typing, editing a field or in a dialog)
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (dialogOpen || editingFieldId || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target;
+      if (target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target?.tagName)) return;
+      const index = allFields.findIndex(f => f.id === selectedId);
+      const select = (field) => {
+        if (!field) return;
+        e.preventDefault();
+        setActiveFieldId(field.id);
+      };
+      if (e.key === 'j' || e.key === 'ArrowDown') select(allFields[Math.min(index + 1, allFields.length - 1)]);
+      else if (e.key === 'k' || e.key === 'ArrowUp') select(allFields[Math.max(index - 1, 0)]);
+      else if (e.key === 'n') {
+        const ahead = [...allFields.slice(index + 1), ...allFields.slice(0, index + 1)];
+        select(ahead.find(f => f.state && f.state !== 'VALID' && corrections[f.id] === undefined));
+      } else if ((e.key === 'e' || e.key === 'Enter') && !isReadOnly && selectedId) {
+        e.preventDefault();
+        setEditingFieldId(selectedId);
+      } else if (e.key === 'a' && canApprove) {
+        e.preventDefault();
+        handleDecision('APPROVE');
+      } else if (e.key === 'r' && canReject) {
+        e.preventDefault();
+        handleDecision('REJECT');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
 
   if (isLoading) {
     return <div className="flex h-[50vh] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
@@ -148,13 +229,6 @@ export function Workspace() {
     );
   }
 
-  const reviewId = claimMutation.data?.id;
-  const isReadOnly = !canReview || (!CLAIMABLE_STATUSES.includes(doc.status) && !reviewId);
-
-  // Only unusable values block approval; abnormal results (e.g. outside reference range)
-  // are confirmed explicitly in the approval dialog.
-  const unresolvedIssues = allFields.filter(f => BLOCKING_STATES.includes(f.state) && corrections[f.id] === undefined);
-  const hasUnresolvedIssues = unresolvedIssues.length > 0;
   const warnings = allFields
     .filter(f => f.state && f.state !== 'VALID' && !BLOCKING_STATES.includes(f.state) && corrections[f.id] === undefined)
     .map(f => ({ id: f.id, name: f.name, value: `${f.value ?? ''} ${f.unit}`.trim(), state: f.state }));
@@ -163,7 +237,7 @@ export function Workspace() {
     .map(f => ({ id: f.id, name: f.name, original: f.value, newValue: corrections[f.id] }));
 
   const handleFieldSelect = (field) => {
-    setActiveField({ page_num: field.page_num, bbox: field.bbox });
+    setActiveFieldId(field.id);
   };
 
   const handleFieldEdit = (fieldId, newValue) => {
@@ -176,12 +250,6 @@ export function Workspace() {
       }
       return next;
     });
-  };
-
-  const handleDecision = (type) => {
-    completeMutation.reset();
-    setDialogType(type);
-    setDialogOpen(true);
   };
 
   const submitDecision = ({ reasons, rejectionReason }) => {
@@ -222,6 +290,7 @@ export function Workspace() {
           <div className="min-w-0">
             <h2 className="text-lg font-semibold tracking-tight truncate" title={doc.filename}>{doc.filename}</h2>
             <p className="text-xs text-muted-foreground font-mono truncate">{doc.id} · {doc.status.replace(/_/g, ' ')}</p>
+            {!isReadOnly && <p className="text-[10px] text-muted-foreground truncate" title="Keyboard shortcuts">{SHORTCUTS}</p>}
           </div>
 
           <div className="ml-6 pl-6 border-l flex items-center gap-6">
@@ -255,7 +324,7 @@ export function Workspace() {
             <Button variant="ghost" size="sm" onClick={() => releaseMutation.mutate()} disabled={!reviewId || releaseMutation.isPending}>
               <LogOut className="h-4 w-4 mr-2" /> Release
             </Button>
-            <Button variant="outline" className="text-destructive hover:bg-destructive/10 border-destructive/20" onClick={() => handleDecision('REJECT')} disabled={!reviewId || completeMutation.isPending}>
+            <Button variant="outline" className="text-destructive hover:bg-destructive/10 border-destructive/20" onClick={() => handleDecision('REJECT')} disabled={!canReject}>
               <XCircle className="h-4 w-4 mr-2" /> Reject Document
             </Button>
 
@@ -266,7 +335,7 @@ export function Workspace() {
                     <Button
                       className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
                       onClick={() => handleDecision('APPROVE')}
-                      disabled={!reviewId || hasUnresolvedIssues || completeMutation.isPending}
+                      disabled={!canApprove}
                     >
                       {completeMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle className="h-4 w-4 mr-2" />}
                       Approve & Submit
@@ -308,7 +377,10 @@ export function Workspace() {
           <ExtractionPanel
             extraction={extraction}
             corrections={isReadOnly ? {} : corrections}
+            activeFieldId={selectedId}
+            editingFieldId={isReadOnly ? null : editingFieldId}
             onFieldSelect={handleFieldSelect}
+            onEditingChange={(fieldId) => setEditingFieldId(isReadOnly ? null : fieldId)}
             onFieldEdit={isReadOnly ? () => {} : handleFieldEdit}
           />
         </div>
