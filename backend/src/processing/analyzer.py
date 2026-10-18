@@ -1,5 +1,8 @@
-import fitz
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+
+import fitz
 from src.core.config import settings
 from src.processing.native_pdf import process_native_page
 from src.processing.scanned_image import process_scanned_page
@@ -35,33 +38,28 @@ def _image_regions(page: fitz.Page) -> list:
         regions.append(rect)
     return regions
 
-def _add_image_region_ocr(page: fitz.Page, page_data: dict) -> None:
-    """
-    OCRs the large images on a native-text page and appends their words to `page_data`, with
-    bounding boxes in the page's frame. Words that sit on top of native text (e.g. a text layer
-    over the image) are skipped so nothing is read twice.
-    """
-    regions = _image_regions(page)
-    if not regions:
-        return
+def _render_image_regions(page: fitz.Page) -> list:
+    """(clip rect, PNG) for each large image on a native-text page, rendered for OCR."""
+    zoom = OCR_RENDER_DPI / 72.0
+    return [
+        (clip, page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, alpha=False).tobytes("png"))
+        for clip in _image_regions(page)
+    ]
 
-    page_w, page_h = page.rect.width, page.rect.height
+def _merge_region_words(page_data: dict, page_w: float, page_h: float, regions: list) -> None:
+    """
+    Appends the OCR'd words of a native-text page's large images (`regions`: (clip rect, OCR
+    result)) with bounding boxes in the page's frame. Words that sit on top of native text
+    (e.g. a text layer over the image) are skipped so nothing is read twice.
+    """
     native_boxes = [w["bbox"] for w in page_data["words"]]
 
     def overlaps_native(cx: float, cy: float) -> bool:
         return any(x <= cx <= x + w and y <= cy <= y + h for x, y, w, h in native_boxes)
 
-    zoom = OCR_RENDER_DPI / 72.0
     added = []
     deskewed = False
-    for clip in regions:
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, alpha=False)
-        try:
-            ocr = process_scanned_page(pix.tobytes("png"), page.number + 1)
-        except ValueError as e:
-            # The native text is still usable; don't fail the document over one image.
-            logger.warning(f"Skipping OCR of an image region on page {page.number + 1}: {e}")
-            continue
+    for clip, ocr in regions:
         deskewed = deskewed or ocr.get("deskew_applied", False)
         for word in ocr["words"]:
             # Region-relative fractions -> page-relative fractions
@@ -80,6 +78,31 @@ def _add_image_region_ocr(page: fitz.Page, page_data: dict) -> None:
         page_data["source_type"] = "MIXED"
         page_data["ocr_used"] = True
         page_data["deskew_applied"] = deskewed
+
+def _ocr_workers() -> int:
+    return settings.OCR_WORKERS if settings.OCR_WORKERS > 0 else min(4, os.cpu_count() or 1)
+
+def _run_ocr(tasks: list) -> list:
+    """
+    OCRs (png, page_number) tasks in parallel, returning results in order (a ValueError for
+    an undecodable image is returned in place of its result). Tesseract runs as a separate
+    process per call, so threads give real parallelism. Each Tesseract is limited to one
+    OpenMP thread: several multi-threaded Tesseracts at once oversubscribe the CPUs badly
+    (measured: 8 pages on 4 CPUs took 22 s this way and over 9 minutes without the limit).
+    """
+    def one(task):
+        png, page_number = task
+        try:
+            return process_scanned_page(png, page_number)
+        except ValueError as e:
+            return e
+
+    workers = min(_ocr_workers(), len(tasks))
+    if workers <= 1:
+        return [one(t) for t in tasks]
+    os.environ["OMP_THREAD_LIMIT"] = "1"
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(one, tasks))
 
 class DocumentAnalyzer:
     """
@@ -105,21 +128,43 @@ class DocumentAnalyzer:
                         f"PDF has {doc.page_count} pages; the maximum is {settings.MAX_DOCUMENT_PAGES}"
                     )
 
+                # 1. Read native text and render whatever needs OCR (PyMuPDF is not thread-safe)
+                plans, tasks = [], []
                 for page in doc:
-                    text = page.get_text("text").strip()
-
-                    if len(text) > MIN_NATIVE_TEXT_CHARS:
-                        page_data = process_native_page(page)
-                        _add_image_region_ocr(page, page_data)
+                    number = page.number + 1
+                    if len(page.get_text("text").strip()) > MIN_NATIVE_TEXT_CHARS:
+                        regions = _render_image_regions(page)
+                        plans.append(("native", process_native_page(page), page.rect, [
+                            (clip, len(tasks) + i) for i, (clip, _) in enumerate(regions)
+                        ]))
+                        tasks += [(png, number) for _, png in regions]
                     else:
                         # Scanned PDF page: render to image at OCR resolution
                         zoom = OCR_RENDER_DPI / 72.0
-                        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-                        page_data = process_scanned_page(pix.tobytes("png"), page.number + 1)
-
-                    pages_data.append(page_data)
+                        plans.append(("scanned", None, None, len(tasks)))
+                        tasks.append((page.get_pixmap(matrix=fitz.Matrix(zoom, zoom)).tobytes("png"), number))
             finally:
                 doc.close()
+
+            # 2. OCR every rendered page and image region in parallel
+            results = _run_ocr(tasks)
+
+            # 3. Assemble the pages in order
+            for kind, page_data, rect, ref in plans:
+                if kind == "scanned":
+                    if isinstance(results[ref], ValueError):
+                        raise DocumentProcessingError(str(results[ref])) from results[ref]
+                    page_data = results[ref]
+                else:
+                    regions = []
+                    for clip, index in ref:
+                        if isinstance(results[index], ValueError):
+                            # The native text is still usable; don't fail the document over one image.
+                            logger.warning(f"Skipping OCR of an image region on page {page_data['page_number']}: {results[index]}")
+                        else:
+                            regions.append((clip, results[index]))
+                    _merge_region_words(page_data, rect.width, rect.height, regions)
+                pages_data.append(page_data)
 
         elif mime_type in ["image/png", "image/jpeg"]:
             try:

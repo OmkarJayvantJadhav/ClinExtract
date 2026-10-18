@@ -26,8 +26,13 @@ class Settings(BaseSettings):
     # A job left RUNNING longer than this (e.g. the worker died) is considered abandoned
     # and may be picked up again when the broker redelivers it.
     JOB_STALE_AFTER_MINUTES: int = 15
+    # A QUEUED or RETRYING job with no progress for this long is sent to the worker again
+    # (its message was lost, e.g. a broker restart). Checked every 10 minutes.
+    STUCK_JOB_MINUTES: int = 15
     # Upper bound on pages processed per document (protects the worker from huge PDFs).
     MAX_DOCUMENT_PAGES: int = 50
+    # Pages OCR'd at the same time within one document; 0 = number of CPUs (at most 4)
+    OCR_WORKERS: int = 0
 
     # --- Compliance ---
     # Fernet key used to encrypt stored documents and OCR artifacts at rest.
