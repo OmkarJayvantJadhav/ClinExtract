@@ -1,3 +1,4 @@
+import math
 import re
 from datetime import datetime, date, timezone
 from typing import Dict, Iterable, Tuple, Optional
@@ -73,7 +74,17 @@ def _to_float(text: str) -> float:
 
 def normalize_numeric(val: str) -> Optional[float]:
     match = _NUMERIC.search(normalize_text(val))
-    return _to_float(match.group(0)) if match else None
+    if not match:
+        return None
+    num = _to_float(match.group(0))
+    return num if math.isfinite(num) else None
+
+# A value typed by a reviewer: one number, optionally after < > <= >= (no other digits or letters)
+_WHOLE_NUMBER = re.compile(rf"\s*(?:<=?|>=?|\u2264|\u2265)?\s*{_NUMERIC.pattern}\s*")
+
+def is_whole_number(val: Optional[str]) -> bool:
+    """True when the whole value is a number, so "14.2.5" or "92abc7" is not read as 14.2 or 92."""
+    return bool(_WHOLE_NUMBER.fullmatch(val or ""))
 
 def normalize_unit(unit: Optional[str]) -> Optional[str]:
     if not unit:
@@ -123,6 +134,9 @@ UNIT_REQUIRED = {"glucose", "hemoglobin"}
 # Values beyond this multiple of the range's upper limit (or below its lower limit divided by
 # it) are treated as a likely misread rather than a plain abnormal result.
 FAR_OUTSIDE_FACTOR = 4.0
+# Cell counts lose their decimal point easily ("3.2" read as "32"), and a low count read tenfold
+# lands only a few times above the range, so they are held to a tighter factor.
+FAR_OUTSIDE_FACTORS = {"white_blood_cell_count": 2.5, "platelet_count": 2.5}
 
 def normalize_flag(flag: Optional[str]) -> Optional[str]:
     """"H"/"L" for a printed high/low flag (HH/LL/High/Low included), else None."""
@@ -199,7 +213,8 @@ def validate_numeric_and_range(
         meta["direction"] = "H" if upper is not None and num > upper else "L" if lower is not None and num < lower else None
 
         outside = (lower is not None and num < lower) or (upper is not None and num > upper)
-        if (upper and num > FAR_OUTSIDE_FACTOR * upper) or (lower and num < lower / FAR_OUTSIDE_FACTOR):
+        factor = FAR_OUTSIDE_FACTORS.get(field_name, FAR_OUTSIDE_FACTOR)
+        if (upper and num > factor * upper) or (lower and num < lower / factor):
             # A misplaced decimal point moves a value tenfold; a human should look at this one.
             meta.update({"value": round(num, 3), "lower": lower, "upper": upper, "reason": "far_outside_range"})
             return "EXTREME_VALUE", norm_str, meta
@@ -288,9 +303,11 @@ def validate_source_agreement(extracted: str, source_text: str, field_name: Opti
     value = _squash(extracted)
     if not value:
         return True
+    labels = RESULT_LABELS.get(field_name or "")
+    if labels:
+        return _number_follows_label(extracted, (source_text or "").split(), labels)
     tokens = [_squash(t) for t in (source_text or "").split()]
     tokens = [t for t in tokens if t]
-    labels = RESULT_LABELS.get(field_name or "")
 
     for start in range(len(tokens)):
         joined = ""
@@ -298,11 +315,28 @@ def validate_source_agreement(extracted: str, source_text: str, field_name: Opti
             joined += tokens[end]
             glued_unit = value.isdigit() and end == start and joined.startswith(value) and _unit_suffix(joined[len(value):])
             if joined == value or glued_unit:
-                if not labels or any(t in labels for t in tokens[max(0, start - LABEL_WINDOW):start]):
-                    return True
-                break
+                return True
             if not value.startswith(joined):
                 break
+    return False
+
+def _number_follows_label(extracted: str, words: list, labels: set) -> bool:
+    """
+    A lab result is on the page when the same number (not merely the same digits: "99" is not
+    "9.9") is printed within a few words after its label, alone or glued to its unit or flag.
+    """
+    wanted = normalize_numeric(extracted)
+    if wanted is None:
+        return False
+    for i, word in enumerate(words):
+        match = _NUMERIC.match(word.lstrip("(["))
+        if not match or match.group(0).startswith("-"):
+            continue
+        rest = word.lstrip("([")[match.end():]
+        if rest and (rest[0].isdigit() or rest[:1] in ".," and rest[1:2].isdigit()):
+            continue  # part of a longer number or a date
+        if _to_float(match.group(0)) == wanted and any(_squash(w) in labels for w in words[max(0, i - LABEL_WINDOW):i]):
+            return True
     return False
 
 def _unit_suffix(rest: str) -> bool:

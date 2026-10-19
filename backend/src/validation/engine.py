@@ -60,13 +60,19 @@ class ValidationEngine:
         )
 
     @staticmethod
-    def build_context(values: Dict[str, Optional[str]]) -> Dict[str, Any]:
+    def build_context(values: Dict[str, Optional[str]], printed: Optional[Dict[str, Optional[str]]] = None) -> Dict[str, Any]:
         """
         Document context: the order its day/month dates are read in (taken from any of its dates
         that can only be read one way, else the configured DATE_ORDER), and the patient's sex and
-        age at collection, used to pick reference ranges.
+        age at collection, used to pick reference ranges. `printed` are the values as read from the
+        page: when a reviewer's correction (e.g. a date retyped as 1985-05-25) removes the date that
+        fixed the order, the page's own dates still decide it, so the other dates are not re-read.
         """
-        order = document_date_order(values.get(name) for name in sorted(DATE_FIELDS)) or date_order()
+        order = (
+            document_date_order(values.get(name) for name in sorted(DATE_FIELDS))
+            or document_date_order((printed or {}).get(name) for name in sorted(DATE_FIELDS))
+            or date_order()
+        )
         collected = normalize_date(values.get("collection_date") or "", order) if values.get("collection_date") else None
         return {
             "sex": normalize_sex(values.get("patient_sex")),

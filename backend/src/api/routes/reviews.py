@@ -15,7 +15,8 @@ from src.db.models.extraction import Extraction
 from src.db.models.extracted_field import ExtractedField
 from src.schemas.review import ReviewResponse, ReviewCompleteRequest
 from src.services.audit import log_audit_event, RESOURCE_DOCUMENT, RESOURCE_EXTRACTED_FIELD
-from src.validation.engine import ValidationEngine, BLOCKING_STATES, VALIDATED_FIELDS
+from src.validation.engine import ValidationEngine, BLOCKING_STATES, VALIDATED_FIELDS, NUMERIC_FIELDS
+from src.validation.rules import is_whole_number
 from src.services.system_settings import get_thresholds
 
 # Set by checks against the page text when the document was processed, which approval does not
@@ -189,10 +190,17 @@ async def complete_review(
     values_by_name = {}
     for field in extraction.extracted_fields:
         values_by_name.setdefault(field.field_name, current_values[field.id])
-    context = engine.build_context(values_by_name)
+    printed_by_name = {}
+    for field in extraction.extracted_fields:
+        printed_by_name.setdefault(field.field_name, field.value)
+    context = engine.build_context(values_by_name, printed_by_name)
     results = {}
     for field in extraction.extracted_fields:
         if field.field_name not in VALIDATED_FIELDS:
+            continue
+        if field.id in corrected and field.field_name in NUMERIC_FIELDS and current_values[field.id] and not is_whole_number(current_values[field.id]):
+            # A typed result must be one number: "14.2.5" or "92abc7" is not read as 14.2 or 92
+            results[field.id] = ("INVALID_FORMAT", [f"Enter a single number: {current_values[field.id]}"], {}, None)
             continue
         results[field.id] = engine.validate_field(
             field.field_name, current_values[field.id], current_units[field.id], context, field.reference_range, field.abnormal_flag

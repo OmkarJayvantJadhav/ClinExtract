@@ -10,8 +10,15 @@ _S = r"[^\S\n]"
 _LABELS = (
     r"DOB|D\.O\.B\.?|Date\s*of\s*Birth|Birth\s*Date|Patient|MRN|Medical|Sex|Gender|Age|Glucose|"
     r"Hemoglobin|Haemoglobin|Hgb|Hematocrit|Haematocrit|Hct|White|WBC|Platelets?|PLT|Specimen|Sample|"
-    r"Collect(?:ion|ed)|Received|Accession|Ordering|Physician|Doctor|Report"
+    r"Collect(?:ion|ed)|Received|Accession|Ordering|Physician|Doctor|Report|"
+    # Whoever else is named on the line ("Referring Physician:", "Ref. Doctor:")
+    r"Ref|Referr(?:ing|ed)|Requesting|Attending|Consult(?:ant|ing)|Treating|UHID"
 )
+# Labels that are also surnames or ordinary words ("Mary Ward"): only a label when a colon follows
+# within a word ("Ward:", "Lab No:", "Bed No.:")
+_COLON_LABELS = r"Ward|Bed|Lab|Client|Location|Reg(?:istration)?|Visit|Barcode"
+# A title that never starts the patient's own name ("Name: Dr. Anil Rao" is a doctor's)
+_TITLE = r"(?:Dr|Prof)\.?"
 _MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?"
 # ISO, numeric day/month, dotted, and month-name dates (14-Mar-1985, 14 March 1985, Mar 14, 1985)
 _DATE = (
@@ -54,6 +61,29 @@ _NOT_PATIENT = {
     "practice", "client", "sample", "specimen", "site", "location", "department", "ward", "panel", "report",
 }
 
+# Words before a glucose label that make it some other glucose than the blood result
+_NOT_BLOOD_GLUCOSE = {
+    "average", "mean", "estimated", "eag", "post", "prandial", "post-prandial", "postprandial", "pp", "ppbs",
+    "2-hr", "2hr", "2-hour", "1-hr", "1hr", "urine", "urinary", "csf", "fluid",
+}
+# Whole heading lines: a urine section ("URINALYSIS", "Urine Routine Examination") lasts until the
+# next blood-test heading. Rows such as "Urine Glucose Negative" or "Blood Negative" are not headings.
+_URINE_SECTION = re.compile(
+    r"(?i)^\W*(?:complete\s+)?(?:urinalysis|urine(?:\s+(?:routine|analysis|examination|exam|r/?e|chemistry|tests?|report|microscopy))*)"
+    r"(?:\s+(?:and|&)\s+microscopy)?\W*$"
+)
+_BLOOD_SECTION = re.compile(
+    r"(?i)^\W*(?:(?:clinical|routine|blood|serum|plasma)\s+)?(?:bio)?(?:chemistry|ha?ematology|ha?emogram|cbc|"
+    r"complete\s+blood\s+count|blood\s+(?:sugar|glucose|chemistry|count|tests?)|diabetes(?:\s+\w+)?|glucose(?:\s+\w+)?)"
+    r"(?:\s+(?:report|panel|profile|tests?))?\W*$"
+)
+# After a printed range: a second range or a sex marker means the ranges are per sex
+# ("13.5 - 17.5 (M); 12.0 - 15.5 (F)"), so the first one may not be this patient's
+_PER_SEX_RANGE = re.compile(
+    rf"^{_S}*(?:\(?{_S}*(?:M|F|Male|Female|Men|Women)\b|[;,/|]{_S}*(?:\(?(?:M|F|Male|Female)\)?:?{_S}*)?(?:{_RANGE}))",
+    re.IGNORECASE,
+)
+
 class RuleBasedExtractor(BaseExtractor):
     def __init__(self):
         # A deterministic rule engine. Labels accept common synonyms/abbreviations so several
@@ -61,7 +91,7 @@ class RuleBasedExtractor(BaseExtractor):
         # optionally, the unit in group "unit".
         self.rules = [
             {"field_name": "patient_name", "not_after": _NOT_PATIENT,
-             "pattern": rf"(?im)(?:\bpatient{_S}*name{_S}*:?|\b(?:patient|name){_S}*:){_S}*(?P<value>[A-Za-z][A-Za-z'\-\.,]*(?:{_S}+[A-Za-z][A-Za-z'\-\.,]*)*?),?(?={_S}+(?:{_LABELS})\b|{_S}*$)"},
+             "pattern": rf"(?im)(?:\bpatient{_S}*name{_S}*:?|\b(?:patient|name){_S}*:){_S}*(?!{_TITLE}{_S})(?P<value>[A-Za-z][A-Za-z'\-\.,]*(?:{_S}+[A-Za-z][A-Za-z'\-\.,]*)*?),?(?={_S}+(?:{_LABELS})\b|{_S}+(?:{_COLON_LABELS})\b\.?(?:{_S}*[A-Za-z.]+)?{_S}*:|{_S}*$)"},
             {"field_name": "date_of_birth", "pattern": rf"(?i)(?:\bdob\b|d\.o\.b\.?|date{_S}*of{_S}*birth|birth{_S}*date):?{_S}*(?P<value>{_DATE})"},
             # An ID contains a digit, so a label word ("Patient ID Number") is never taken as the ID
             {"field_name": "patient_id", "pattern": rf"(?i)(?:\bpatient{_S}*id(?:entifier)?\b|\bmrn\b|\bmedical{_S}*record\b|\bpt\.?{_S}*id\b)(?:{_S}*(?:number|no\.?|#))?{_S}*:?{_S}*#?{_S}*(?P<value>(?=[A-Za-z\-]*\d)[A-Za-z0-9][A-Za-z0-9\-]*)"},
@@ -69,8 +99,10 @@ class RuleBasedExtractor(BaseExtractor):
             {"field_name": "specimen_type", "pattern": rf"(?i)(?:specimen|sample)(?:{_S}*type)?{_S}*:?{_S}*(?P<value>whole{_S}+blood|blood|urine|saliva|serum|plasma)\b"},
             {"field_name": "collection_date", "pattern": rf"(?i)(?:collection{_S}*date|date{_S}*collected|collected(?:{_S}*on)?|draw{_S}*date){_S}*:?{_S}*(?P<value>{_DATE})"},
             {"field_name": "received_date", "pattern": rf"(?i)(?:received{_S}*date|date{_S}*received|received(?:{_S}*on)?){_S}*:?{_S}*(?P<value>{_DATE})"},
-            # Not "Estimated Average Glucose" (eAG)
-            {"field_name": "glucose", "pattern": rf"(?i)(?<!average[^\S\n])\b(?:glucose|glu)(?:,?{_S}*(?:fasting|random|serum|plasma))?{_S}*:?{_S}*{_result(rf'mg{_S}*/{_S}*dL|mmol{_S}*/{_S}*L', other_units=True)}"},
+            # Not "Estimated Average Glucose" (eAG), a post-meal or urine glucose, or a row under a
+            # urinalysis heading
+            {"field_name": "glucose", "not_after": _NOT_BLOOD_GLUCOSE, "after_words": 3, "not_in_section": _URINE_SECTION,
+             "pattern": rf"(?i)\b(?:glucose|glu)(?:,?{_S}*(?:fasting|random|serum|plasma))?{_S}*:?{_S}*{_result(rf'mg{_S}*/{_S}*dL|mmol{_S}*/{_S}*L', other_units=True)}"},
             # Not MCH/MCHC ("Mean Cell/Corpuscular Hemoglobin") or HbA1c ("Glycated Hemoglobin", "Hemoglobin A1c")
             {"field_name": "hemoglobin", "pattern": rf"(?i)(?<!cell[^\S\n])(?<!corpuscular[^\S\n])(?<!glycated[^\S\n])(?<!glycosylated[^\S\n])\b(?:hemoglobin|haemoglobin|hgb|hb)\b(?!{_S}*a1c){_S}*:?{_S}*{_result(rf'g{_S}*/{_S}*dL|g{_S}*/{_S}*L|mmol{_S}*/{_S}*L', other_units=True)}"},
             {"field_name": "hematocrit", "pattern": rf"(?i)\b(?:hematocrit|haematocrit|hct)\b{_S}*:?{_S}*{_result(rf'%|L{_S}*/{_S}*L')}"},
@@ -106,7 +138,8 @@ class RuleBasedExtractor(BaseExtractor):
                 if rule["field_name"] in found:
                     continue
                 match = next((m for m in re.finditer(rule["pattern"], full_text)
-                              if not self._follows(full_text, m.start(), rule.get("not_after"))), None)
+                              if not self._follows(full_text, m.start(), rule.get("not_after"), rule.get("after_words", 1))
+                              and not self._in_section(full_text, m.start(), rule.get("not_in_section"))), None)
                 if not match:
                     continue
 
@@ -117,6 +150,8 @@ class RuleBasedExtractor(BaseExtractor):
                 unit = groups.get("unit")
                 flag = groups.get("flag") or groups.get("flag2")
                 ref = groups.get("ref")
+                if ref and _PER_SEX_RANGE.match(full_text[match.end("ref"):].split("\n", 1)[0]):
+                    ref = None
 
                 # Highlight the value and its unit together
                 m_start = match.start("value")
@@ -174,12 +209,32 @@ class RuleBasedExtractor(BaseExtractor):
         return [sorted(indexes, key=lambda i: words[i]["bbox"][0]) for _, _, indexes in rows]
 
     @staticmethod
-    def _follows(text: str, position: int, words: Optional[set]) -> bool:
-        """True when the word just before `position` on the same line is one of `words`."""
+    def _follows(text: str, position: int, words: Optional[set], count: int = 1) -> bool:
+        """
+        True when one of the `count` words just before `position` on the same line is one of
+        `words` (compared without case, a trailing colon or a possessive "'s").
+        """
         if not words:
             return False
-        before = text[:position].rsplit("\n", 1)[-1].split()
-        return bool(before) and before[-1].lower().rstrip(":") in words
+        before = text[:position].rsplit("\n", 1)[-1].split()[-count:]
+        return any(re.sub(r"['’]s$", "", w.lower().rstrip(":")) in words for w in before)
+
+    @staticmethod
+    def _in_section(text: str, position: int, heading: Optional[re.Pattern]) -> bool:
+        """
+        True when `position` is under a heading line matching `heading` (e.g. URINALYSIS), with no
+        blood-test heading between them. Heading lines are lines without digits.
+        """
+        if heading is None:
+            return False
+        for line in reversed(text[:position].split("\n")[:-1]):
+            if any(ch.isdigit() for ch in line):
+                continue
+            if heading.search(line):
+                return True
+            if _BLOOD_SECTION.search(line):
+                return False
+        return False
 
     def _compute_union_bbox(self, words: List[Dict[str, Any]]) -> Optional[List[float]]:
         boxes = [w["bbox"] for w in words if w.get("bbox") and len(w["bbox"]) == 4]

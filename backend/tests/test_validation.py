@@ -133,3 +133,30 @@ def test_multiple_issues(base_extraction):
     assert "patient_id: MISSING" in base_extraction.validation_summary["messages"]
     assert "glucose: OUTSIDE_REFERENCE_RANGE" in base_extraction.validation_summary["messages"]
     assert "date_of_birth: INVALID_FORMAT" in base_extraction.validation_summary["messages"]
+
+
+def test_a_low_count_with_a_dropped_decimal_point_goes_to_review():
+    from src.validation.rules import validate_numeric_and_range
+    state, _, meta = validate_numeric_and_range("white_blood_cell_count", "32", "x10^3/uL", printed_range="4.5 - 11.0")
+    assert state == "EXTREME_VALUE" and meta["reason"] == "far_outside_range"
+    # A plainly high count is still an ordinary abnormal result
+    assert validate_numeric_and_range("white_blood_cell_count", "18", "x10^3/uL", printed_range="4.5 - 11.0")[0] == "OUTSIDE_REFERENCE_RANGE"
+
+
+def test_an_overflowing_number_is_not_a_number():
+    from src.validation.rules import validate_numeric_and_range
+    assert validate_numeric_and_range("glucose", "9" * 400, "mg/dL")[0] == "INVALID_FORMAT"
+
+
+@pytest.mark.parametrize("field, value, page, found", [
+    ("glucose", "99", "Glucose 9.9 mmol/L 3.9 - 5.6", False),
+    ("hemoglobin", "14.2", "Hemoglobin 142 g/L", False),
+    ("glucose", "9.9", "Glucose 9.9 mmol/L", True),
+    ("hemoglobin", "14.2", "Hemoglobin 14,2 g/dL", True),
+    ("platelet_count", "250000", "Platelets 250,000 /uL", True),
+    ("glucose", "92", "Glucose 92mg/dL", True),
+    ("glucose", "92", "Glucose (92) H", True),
+])
+def test_a_result_must_match_the_printed_number_decimal_point_included(field, value, page, found):
+    from src.validation.rules import validate_source_agreement
+    assert validate_source_agreement(value, page, field) is found
