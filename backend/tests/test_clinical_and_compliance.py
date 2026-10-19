@@ -40,7 +40,9 @@ def _extraction(**values):
     }
     base.update(values)
     e = Extraction(id=uuid.uuid4(), model_version="t", provider="t", prompt_version="t")
-    e.extracted_fields = [ExtractedField(field_name=k, value=v, confidence=100.0, page_num=1) for k, v in base.items() if v is not None]
+    units = {"glucose": "mg/dL", "hemoglobin": "g/dL"}
+    e.extracted_fields = [ExtractedField(field_name=k, value=v, unit=units.get(k), confidence=100.0, page_num=1)
+                          for k, v in base.items() if v is not None]
     return e
 
 def _field(e, name):

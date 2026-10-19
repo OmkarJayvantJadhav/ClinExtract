@@ -81,7 +81,8 @@ def test_engine_uses_printed_range_and_explains_it():
               "white_blood_cell_count": "4.5 - 13.5", "platelet_count": "150 - 450"}
     e = Extraction(id=uuid.uuid4(), model_version="t", provider="t", prompt_version="t")
     e.extracted_fields = [
-        ExtractedField(field_name=k, value=v, confidence=100.0, reference_range=ranges.get(k)) for k, v in values.items()
+        ExtractedField(field_name=k, value=v, unit={"glucose": "mg/dL", "hemoglobin": "g/dL"}.get(k), confidence=100.0,
+                       reference_range=ranges.get(k)) for k, v in values.items()
     ]
     ValidationEngine().validate_extraction(e)
     fields = {f.field_name: f for f in e.extracted_fields}

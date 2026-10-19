@@ -7,11 +7,9 @@ def calculate_field_confidence(
     """
     field_confidence = source_confidence * extraction_quality * validation_factor * source_agreement
     """
-    # Normalize source_confidence from 0-100 to 0.0-1.0
-    if source_confidence > 1.0:
-        src_conf = source_confidence / 100.0
-    else:
-        src_conf = source_confidence
+    # Every extractor reports confidence from 0 to 100 (a guess by magnitude would read an AI
+    # extractor's 1, i.e. 1%, as 100%)
+    src_conf = source_confidence / 100.0
 
     extraction_quality = 1.0 # For rule-based, if it matched, it's 1.0
     

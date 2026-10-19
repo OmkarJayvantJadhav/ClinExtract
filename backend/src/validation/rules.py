@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, date, timezone
-from typing import Dict, Tuple, Optional
+from typing import Dict, Iterable, Tuple, Optional
 from src.validation.reference_ranges import (
     UNIT_CONVERSIONS, RAW_COUNT_THRESHOLD, PLAUSIBLE_LIMITS, canonical_unit, get_reference_range,
 )
@@ -22,14 +22,14 @@ def date_order() -> str:
     from src.core.config import settings
     return "DMY" if str(settings.DATE_ORDER).upper() == "DMY" else "MDY"
 
-def parse_date(val: str) -> Optional[date]:
+def parse_date(val: str, order: Optional[str] = None) -> Optional[date]:
     """
-    ISO first; then numeric day/month dates in the configured DATE_ORDER, falling back to the
-    other order only when the value cannot be read that way (e.g. a day above 12). Dotted dates
-    (31.12.2024) are always day first.
+    ISO first; then numeric day/month dates in `order` (default: the configured DATE_ORDER),
+    falling back to the other order only when the value cannot be read that way (e.g. a day
+    above 12). Dotted dates (31.12.2024) are always day first.
     """
     val = normalize_text(val)
-    numeric = _DMY_FORMATS if date_order() == "DMY" else _MDY_FORMATS
+    numeric = _DMY_FORMATS if (order or date_order()) == "DMY" else _MDY_FORMATS
     for fmt in ("%Y-%m-%d", "%Y/%m/%d", *numeric, "%d.%m.%Y", *_MONTH_NAME_FORMATS):
         try:
             return datetime.strptime(val, fmt).date()
@@ -42,20 +42,38 @@ def is_ambiguous_date(val: str) -> bool:
     m = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})[/-]\d{4}", normalize_text(val or ""))
     return bool(m) and m.group(1) != m.group(2) and int(m.group(1)) <= 12 and int(m.group(2)) <= 12
 
-def normalize_date(val: str) -> Optional[str]:
-    parsed = parse_date(val)
+def document_date_order(values: Iterable[Optional[str]]) -> Optional[str]:
+    """
+    "DMY" or "MDY" when one of a document's numeric dates can only be read that way (a day above
+    12, e.g. 25/03/1980), so its ambiguous dates are read the same way. None without such
+    evidence, or when the dates disagree.
+    """
+    seen = set()
+    for val in values:
+        m = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})[/-]\d{4}", normalize_text(val or ""))
+        if m:
+            first, second = int(m.group(1)), int(m.group(2))
+            if first > 12 >= second:
+                seen.add("DMY")
+            elif second > 12 >= first:
+                seen.add("MDY")
+    return seen.pop() if len(seen) == 1 else None
+
+def normalize_date(val: str, order: Optional[str] = None) -> Optional[str]:
+    parsed = parse_date(val, order)
     return parsed.strftime("%Y-%m-%d") if parsed else None
 
+# Thousands separators ("250,000"), a decimal comma ("14,8") or a decimal point ("13.2")
+_NUMERIC = re.compile(r"-?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+,\d{1,2}(?![\d,])|\d+(?:\.\d+)?)")
+
+def _to_float(text: str) -> float:
+    if re.fullmatch(r"-?\d+,\d{1,2}", text):
+        return float(text.replace(",", "."))  # decimal comma
+    return float(text.replace(",", ""))
+
 def normalize_numeric(val: str) -> Optional[float]:
-    val = normalize_text(val)
-    # Accept thousands separators ("250,000") as well as plain decimals ("13.2").
-    match = re.search(r'-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?', val)
-    if match:
-        try:
-            return float(match.group(0).replace(",", ""))
-        except ValueError:
-            return None
-    return None
+    match = _NUMERIC.search(normalize_text(val))
+    return _to_float(match.group(0)) if match else None
 
 def normalize_unit(unit: Optional[str]) -> Optional[str]:
     if not unit:
@@ -65,8 +83,8 @@ def normalize_unit(unit: Optional[str]) -> Optional[str]:
     u = u.replace("cumm", "mm3").replace("mm^3", "mm3")
     return u or None
 
-def validate_date(val: str, today: Optional[date] = None) -> Tuple[str, Optional[str]]:
-    parsed = parse_date(val)
+def validate_date(val: str, today: Optional[date] = None, order: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    parsed = parse_date(val, order)
     if not parsed:
         return "INVALID_FORMAT", None
     today = today or datetime.now(timezone.utc).date()
@@ -78,8 +96,9 @@ def _format_number(num: float) -> str:
     num = round(num, 3)
     return str(int(num)) if float(num).is_integer() else str(num)
 
-_RANGE_PAIR = re.compile(r"(-?[\d,]*\.?\d+)\s*(?:-|\u2013|to)\s*(-?[\d,]*\.?\d+)", re.IGNORECASE)
-_RANGE_BOUND = re.compile(r"(<=?|>=?|\u2264|\u2265)\s*([\d,]*\.?\d+)")
+_RANGE_NUMBER = r"\d[\d,]*(?:\.\d+)?"
+_RANGE_PAIR = re.compile(rf"(-?{_RANGE_NUMBER})\s*(?:-|\u2013|to)\s*(-?{_RANGE_NUMBER})", re.IGNORECASE)
+_RANGE_BOUND = re.compile(rf"(<=?|>=?|\u2264|\u2265)\s*({_RANGE_NUMBER})")
 
 def parse_printed_range(text: Optional[str]) -> Optional[Tuple[Optional[float], Optional[float]]]:
     """(lower, upper) from a printed range such as "70 - 100", "<200" or ">= 60"; None if unreadable."""
@@ -87,14 +106,19 @@ def parse_printed_range(text: Optional[str]) -> Optional[Tuple[Optional[float], 
         return None
     pair = _RANGE_PAIR.search(text)
     if pair:
-        lower, upper = (float(n.replace(",", "")) for n in pair.groups())
+        lower, upper = (_to_float(n) for n in pair.groups())
         return (lower, upper) if lower <= upper else None
     bound = _RANGE_BOUND.search(text)
     if bound:
         op, number = bound.groups()
-        limit = float(number.replace(",", ""))
+        limit = _to_float(number)
         return (None, limit) if op in ("<", "<=", "\u2264") else (limit, None)
     return None
+
+# Analytes whose common units differ by a factor that still gives a plausible-looking number
+# (glucose 5.5 mmol/L vs mg/dL; hemoglobin 8.9 mmol/L vs g/dL): without a unit the value
+# cannot be read safely.
+UNIT_REQUIRED = {"glucose", "hemoglobin"}
 
 # Values beyond this multiple of the range's upper limit (or below its lower limit divided by
 # it) are treated as a likely misread rather than a plain abnormal result.
@@ -140,6 +164,8 @@ def validate_numeric_and_range(
             meta["original_unit"] = unit
             num = num * factor
             scale = factor
+    elif field_name in UNIT_REQUIRED:
+        return "UNRECOGNIZED_UNIT", _format_number(num), {"value": num, "unit": None, "expected_unit": expected_unit}
     elif field_name in COUNT_FIELDS and num >= RAW_COUNT_THRESHOLD:
         meta["original_value"] = num
         meta["assumed_unit"] = "cells/uL"
@@ -169,6 +195,8 @@ def validate_numeric_and_range(
                 return "NO_REFERENCE_RANGE", norm_str, meta
             lower, upper, basis = ref
         meta["range_basis"] = basis
+        # Which side of the range the value falls on; checked against a printed H/L flag
+        meta["direction"] = "H" if upper is not None and num > upper else "L" if lower is not None and num < lower else None
 
         outside = (lower is not None and num < lower) or (upper is not None and num > upper)
         if (upper and num > FAR_OUTSIDE_FACTOR * upper) or (lower and num < lower / FAR_OUTSIDE_FACTOR):
@@ -184,6 +212,9 @@ def validate_numeric_and_range(
 
     return "VALID", norm_str, (meta or None)
 
+# Printed when the sex is not known; the field is optional, so these mean "not given"
+UNKNOWN_SEX = {"u", "unknown", "unk", "other", "o", "x", "not specified", "not stated", "undisclosed", "n/a", "na"}
+
 def normalize_sex(val: Optional[str]) -> Optional[str]:
     v = normalize_text(val or "").lower()
     if v in ("m", "male", "man"):
@@ -192,9 +223,9 @@ def normalize_sex(val: Optional[str]) -> Optional[str]:
         return "F"
     return None
 
-def age_in_years(dob: Optional[str], on: Optional[str] = None) -> Optional[int]:
+def age_in_years(dob: Optional[str], on: Optional[str] = None, order: Optional[str] = None) -> Optional[int]:
     """Age in whole years on the given ISO date (default: today); None if unknown."""
-    birth = parse_date(dob) if dob else None
+    birth = parse_date(dob, order) if dob else None
     if not birth:
         return None
     ref = parse_date(on) if on else None
