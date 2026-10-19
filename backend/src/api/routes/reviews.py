@@ -67,7 +67,10 @@ async def claim_review(
 
     if active_review:
         if active_review.reviewer_id == current_user.id:
-            # Re-entrant: the same reviewer reopening the workspace (e.g. after a reload)
+            # Re-entrant: the same reviewer reopening the workspace (e.g. after a reload). This
+            # renews the claim: an expired one could otherwise be taken over while they work.
+            active_review.updated_at = datetime.now(timezone.utc)
+            await db.commit()
             response.status_code = status.HTTP_200_OK
             return await _load_review(db, active_review.id)
         if not _claim_expired(active_review):

@@ -13,7 +13,7 @@ export function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
-  const { login, isLoading } = useAuth();
+  const { login, isLoading, sessionEnded } = useAuth();
   const navigate = useNavigate();
   const { data: demo } = useDemoInfo();
 
@@ -93,6 +93,9 @@ export function Login() {
             </CardHeader>
             <form onSubmit={handleLogin}>
               <CardContent className="space-y-4">
+                {sessionEnded && !error && (
+                  <div className="p-3 text-sm bg-muted border rounded-md">Your session has ended. Please sign in again.</div>
+                )}
                 {error && (
                   <div className="p-3 text-sm text-destructive-foreground bg-destructive/10 border border-destructive/20 rounded-md">
                     {error}

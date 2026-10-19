@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { apiUrl, getCsrfToken } from '@/services/apiClient';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { apiUrl, getCsrfToken, onSessionExpired } from '@/services/apiClient';
 import { queryClient } from '@/lib/queryClient';
 
 const AuthContext = createContext(null);
@@ -8,6 +8,8 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  // True after the server ended the session (expired, revoked, account changed)
+  const [sessionEnded, setSessionEnded] = useState(false);
 
   const checkSession = useCallback(async () => {
     try {
@@ -36,6 +38,17 @@ export function AuthProvider({ children }) {
     checkSession();
   }, [checkSession]);
 
+  // Any API call answered 401: sign out locally, so the app returns to the sign-in page
+  // instead of showing errors on every page (and polling with a dead session)
+  const signedIn = useRef(false);
+  useEffect(() => { signedIn.current = isAuthenticated; }, [isAuthenticated]);
+  useEffect(() => onSessionExpired(() => {
+    queryClient.clear();
+    if (signedIn.current) setSessionEnded(true);
+    setUser(null);
+    setIsAuthenticated(false);
+  }), []);
+
   const login = useCallback(async (credentials) => {
     setIsLoading(true);
     try {
@@ -62,6 +75,7 @@ export function AuthProvider({ children }) {
       
       const data = await response.json();
       setUser(data);
+      setSessionEnded(false);
       setIsAuthenticated(true);
     } catch (error) {
       console.error('Login error', error);
@@ -100,6 +114,7 @@ export function AuthProvider({ children }) {
     user,
     isAuthenticated,
     isLoading,
+    sessionEnded,
     login,
     logout,
     hasRole

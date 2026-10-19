@@ -57,6 +57,25 @@ def clear_auth_cookies(response: Response) -> None:
     response.delete_cookie("access_token", httponly=True, secure=settings.cookie_secure, samesite="strict")
     response.delete_cookie("clinextract_csrf", secure=settings.cookie_secure, samesite="strict")
 
+async def _record_wrong_password(db: AsyncSession, user: User, now: datetime, ip: str, action: str) -> bool:
+    """
+    Counts a wrong password (at login or when changing it) towards the lockout, audits it and
+    commits. Returns whether the account is now locked.
+    """
+    # A shared demo account is never locked: anyone could otherwise lock everyone out.
+    demo = is_demo_account(user)
+    user.failed_login_count = 0 if demo else (user.failed_login_count or 0) + 1
+    locked = not demo and user.failed_login_count >= settings.LOGIN_MAX_FAILED_ATTEMPTS
+    if locked:
+        user.locked_until = now + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
+        user.failed_login_count = 0
+    await log_audit_event(
+        db, action="USER_ACCOUNT_LOCKED" if locked else action, resource_type=RESOURCE_USER,
+        resource_id=str(user.id), after_state={"ip": ip},
+    )
+    await db.commit()
+    return locked
+
 @router.post("/login", response_model=UserResponse)
 async def login(
     login_data: UserLogin,
@@ -84,17 +103,7 @@ async def login(
         )
 
     if not verify_password(login_data.password, user.password_hash):
-        # A shared demo account is never locked: anyone could otherwise lock everyone out.
-        user.failed_login_count = 0 if demo else (user.failed_login_count or 0) + 1
-        locked = not demo and user.failed_login_count >= settings.LOGIN_MAX_FAILED_ATTEMPTS
-        if locked:
-            user.locked_until = now + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
-            user.failed_login_count = 0
-        await log_audit_event(
-            db, action="USER_ACCOUNT_LOCKED" if locked else "USER_LOGIN_FAILED", resource_type=RESOURCE_USER,
-            resource_id=str(user.id), after_state={"ip": ip},
-        )
-        await db.commit()
+        await _record_wrong_password(db, user, now, ip, "USER_LOGIN_FAILED")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
 
     if not user.is_active:
@@ -132,12 +141,26 @@ async def logout_everywhere(
 @router.post("/change-password", response_model=UserResponse)
 async def change_password(
     body: PasswordChangeRequest,
+    request: Request,
     response: Response,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     _refuse_for_demo(current_user)
+    now = datetime.now(timezone.utc)
+    await db.refresh(current_user, with_for_update=True)
+    if current_user.locked_until and current_user.locked_until > now:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Account temporarily locked after repeated wrong passwords.")
     if not verify_password(body.current_password, current_user.password_hash):
+        # Guesses here count like failed logins: someone holding an unattended session must not
+        # be able to try passwords without limit and then take the account over.
+        locked = await _record_wrong_password(db, current_user, now, _client_ip(request), "USER_PASSWORD_CHANGE_FAILED")
+        if locked:
+            # End every session of the account, including the one being used to guess
+            current_user.token_version = (current_user.token_version or 0) + 1
+            await db.commit()
+            clear_auth_cookies(response)
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Account temporarily locked after repeated wrong passwords.")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
     if body.new_password == body.current_password:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="New password must differ from the current password")

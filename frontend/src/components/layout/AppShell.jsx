@@ -19,10 +19,10 @@ export function AppShell() {
   return (
     <div className="flex min-h-screen w-full flex-col bg-muted/20 md:flex-row">
       {/* Sidebar for Desktop */}
-      <Sidebar collapsed={sidebarCollapsed} />
+      <Sidebar collapsed={sidebarCollapsed} mobileOpen={mobileMenuOpen} onClose={() => setMobileMenuOpen(false)} />
       
       <div className="flex flex-col sm:gap-4 sm:py-4 w-full md:flex-1">
-        <Header toggleSidebar={toggleMobileMenu} />
+        <Header toggleSidebar={toggleMobileMenu} menuOpen={mobileMenuOpen} />
         
         <main className="flex-1 items-start p-4 sm:px-6 sm:py-0 md:gap-8">
           {/* Main content routes render here */}

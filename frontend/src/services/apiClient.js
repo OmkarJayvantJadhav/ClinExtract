@@ -52,6 +52,19 @@ function errorMessage(errorData, status) {
   return `API Error: ${status}`;
 }
 
+// Called when the API answers 401: the session expired or was revoked (e.g. by an admin)
+const sessionExpiredListeners = new Set();
+
+/** Registers `listener` for an ended session; returns a function that unregisters it. */
+export function onSessionExpired(listener) {
+  sessionExpiredListeners.add(listener);
+  return () => sessionExpiredListeners.delete(listener);
+}
+
+function checkSession(status) {
+  if (status === 401) sessionExpiredListeners.forEach(listener => listener());
+}
+
 /**
  * fetch wrapper. `endpoint` is relative to API_BASE_URL (which already includes /api/v1),
  * e.g. fetchApi('/documents'). Throws ApiError with `.status` and `.detail` on failure.
@@ -80,6 +93,7 @@ export async function fetchApi(endpoint, options = {}) {
   });
 
   if (!response.ok) {
+    checkSession(response.status);
     const errorData = await response.json().catch(() => ({}));
     const detail = errorData?.detail ?? errorData?.error;
     throw new ApiError(errorMessage(errorData, response.status), response.status, detail);
@@ -106,8 +120,9 @@ export function uploadDocument(file, { onProgress, allowDuplicate = false } = {}
     xhr.onload = () => {
       let body = {};
       try { body = JSON.parse(xhr.responseText || '{}'); } catch { /* non-JSON error page */ }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
-      else reject(new ApiError(errorMessage(body, xhr.status), xhr.status, body?.detail));
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(body);
+      checkSession(xhr.status);
+      reject(new ApiError(errorMessage(body, xhr.status), xhr.status, body?.detail));
     };
     xhr.onerror = () => reject(new ApiError('Cannot reach the server', 0));
     const form = new FormData();
