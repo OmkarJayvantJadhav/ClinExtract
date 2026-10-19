@@ -27,3 +27,26 @@ def test_database_models_import():
 def test_alembic_metadata_connected():
     assert len(Base.metadata.tables) > 0
     assert "users" in Base.metadata.tables
+
+
+async def test_worker_is_not_pinged_when_the_broker_is_down(db_session, monkeypatch):
+    import time
+    from src.api.routes import health
+
+    async def refuse(*args, **kwargs):
+        raise ConnectionRefusedError("broker down")
+
+    pinged = []
+
+    def inspect(*args, **kwargs):
+        pinged.append(True)
+        raise ConnectionRefusedError("broker down")
+
+    monkeypatch.setattr(health.aio_pika, "connect", refuse)
+    monkeypatch.setattr(health.celery_app.control, "inspect", inspect)
+    start = time.time()
+    status = await health._check_dependencies(db_session)
+    assert status["rabbitmq"] == "unavailable" and status["worker"] == "unavailable"
+    assert status["database"] == "healthy"
+    assert not pinged
+    assert time.time() - start < 2

@@ -39,12 +39,15 @@ async def _check_dependencies(db: AsyncSession) -> Dict[str, str]:
     except Exception:
         pass
 
-    try:
-        inspector = celery_app.control.inspect(timeout=1.0)
-        if await asyncio.to_thread(inspector.ping):
-            status["worker"] = "healthy"
-    except Exception:
-        pass
+    # Workers are reached through the broker. Without it the ping keeps retrying the connection
+    # for several seconds before failing, which held up the whole dashboard.
+    if status["rabbitmq"] == "healthy":
+        try:
+            inspector = celery_app.control.inspect(timeout=1.0)
+            if await asyncio.to_thread(inspector.ping):
+                status["worker"] = "healthy"
+        except Exception:
+            pass
 
     storage_dir = os.getenv("STORAGE_DIR", "/app/data/documents")
     if os.path.isdir(storage_dir) and os.access(storage_dir, os.W_OK):
