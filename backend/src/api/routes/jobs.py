@@ -8,7 +8,7 @@ from src.core.database import get_db
 from src.db.models.user import User, UserRole
 from src.db.models.processing_job import ProcessingJob
 from src.api.deps import require_roles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
 router = APIRouter()
@@ -22,8 +22,7 @@ class JobResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 @router.get("/{job_id}", response_model=JobResponse)
 async def get_job(

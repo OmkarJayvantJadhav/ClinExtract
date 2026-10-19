@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 import uuid
 from datetime import datetime
 from typing import List, Optional
@@ -30,8 +30,7 @@ class ExtractedFieldResponse(BaseModel):
             return round(v * 100, 1)
         return v
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 
@@ -53,8 +52,7 @@ class ExtractionResponse(BaseModel):
             return round(v * 100, 1)
         return v
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DocumentResponse(BaseModel):
     id: uuid.UUID
@@ -63,8 +61,7 @@ class DocumentResponse(BaseModel):
     status: DocumentStatus
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DocumentListItem(DocumentResponse):
     # Summary of the current extraction, for list views
