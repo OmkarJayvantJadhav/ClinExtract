@@ -29,15 +29,21 @@ const navItems = [
   { name: 'Settings', path: '/settings', icon: Settings },
 ];
 
-export function Sidebar({ collapsed }) {
+/**
+ * Navigation. On small screens it is hidden until opened from the header's menu button, then
+ * shown over the page; picking a page or tapping outside closes it (`onClose`).
+ */
+export function Sidebar({ collapsed, mobileOpen = false, onClose = () => {} }) {
   const { hasRole } = useAuth();
   const visibleItems = navItems.filter(item => !ROUTE_ROLES[item.path] || hasRole(ROUTE_ROLES[item.path]));
 
   return (
+    <>
+    {mobileOpen && <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onClose} aria-hidden="true" />}
     <aside className={cn(
       "fixed inset-y-0 left-0 z-40 flex flex-col border-r bg-sidebar text-sidebar-foreground transition-all duration-300 md:static",
-      collapsed ? "w-16" : "w-64",
-      "max-md:hidden" // In a real app, this would be toggled via mobile menu state
+      collapsed && !mobileOpen ? "w-16" : "w-64",
+      !mobileOpen && "max-md:hidden"
     )}>
       <div className="flex h-16 items-center border-b border-sidebar-border px-4 py-4">
         <div className="flex items-center gap-2 font-semibold">
@@ -53,6 +59,7 @@ export function Sidebar({ collapsed }) {
                 <TooltipTrigger asChild>
                   <NavLink
                     to={item.path}
+                    onClick={onClose}
                     end={item.path === '/documents'}
                     className={({ isActive }) => cn(
                       "flex items-center gap-3 rounded-md px-3 py-2 transition-colors",
@@ -77,5 +84,6 @@ export function Sidebar({ collapsed }) {
         </nav>
       </div>
     </aside>
+    </>
   );
 }
