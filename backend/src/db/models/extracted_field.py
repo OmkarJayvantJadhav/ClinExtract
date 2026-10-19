@@ -38,5 +38,11 @@ class ExtractedField(BaseModel):
         return self.value
         
     @property
+    def current_unit(self) -> str:
+        """The unit after review: the latest corrected unit, else the extracted one."""
+        corrected = [c.new_unit for c in self.field_corrections or [] if c.new_unit is not None] if self.is_corrected else []
+        return corrected[-1] if corrected else self.unit
+
+    @property
     def original_value(self) -> str:
         return self.value

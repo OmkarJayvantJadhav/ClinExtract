@@ -52,7 +52,7 @@ export function DocumentDetails() {
         .map(f => ({ id: f.id, name: f.field_name.replace(/_/g, ' '), value: f.current_value, corrected: f.is_corrected, state: f.validation_state, message: f.validation_messages?.[0] })),
       laboratoryResults: extraction.extracted_fields
         .filter(f => !patientFields.includes(f.field_name) && !specimenFields.includes(f.field_name))
-        .map(f => ({ id: f.id, name: f.field_name.replace(/_/g, ' '), value: f.current_value, unit: f.unit || '', referenceRange: f.reference_range, abnormalFlag: f.abnormal_flag, corrected: f.is_corrected, state: f.validation_state, message: f.validation_messages?.[0] }))
+        .map(f => ({ id: f.id, name: f.field_name.replace(/_/g, ' '), value: f.current_value, unit: f.current_unit || f.unit || '', referenceRange: f.reference_range, abnormalFlag: f.abnormal_flag, corrected: f.is_corrected, state: f.validation_state, message: f.validation_messages?.[0] }))
     };
   }
 

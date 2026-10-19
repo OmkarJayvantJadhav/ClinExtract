@@ -13,6 +13,7 @@ class ExtractedFieldResponse(BaseModel):
     abnormal_flag: Optional[str] = None
     original_value: Optional[str] = None
     current_value: Optional[str] = None
+    current_unit: Optional[str] = None
     is_corrected: bool = False
     normalized_value: Optional[str]
     validation_state: Optional[str]

@@ -6,13 +6,14 @@ import { fetchApi, BLOCKING_STATES } from '@/services/apiClient';
 import { Button } from '@/components/ui/button';
 import { DocumentViewer } from '@/features/review/DocumentViewer';
 import { ExtractionPanel } from '@/features/review/ExtractionPanel';
-import { DecisionDialogs } from '@/features/review/DecisionDialogs';
+import { DecisionDialogs, ConfirmWarningsDialog } from '@/features/review/DecisionDialogs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuth } from '@/context/AuthContext';
 
 const PATIENT_FIELDS = ['patient_name', 'date_of_birth', 'patient_id'];
 const SPECIMEN_FIELDS = ['specimen_type', 'collection_date', 'received_date'];
 const CLAIMABLE_STATUSES = ['REVIEW_REQUIRED', 'REVIEW_IN_PROGRESS'];
+const NUMERIC_FIELDS = ['glucose', 'hemoglobin', 'hematocrit', 'white_blood_cell_count', 'platelet_count'];
 
 function toPanelField(f) {
   return {
@@ -20,7 +21,8 @@ function toPanelField(f) {
     name: f.field_name.replace(/_/g, ' '),
     value: f.current_value,
     original_value: f.original_value,
-    unit: f.unit || '',
+    unit: f.current_unit || f.unit || '',
+    isNumeric: NUMERIC_FIELDS.includes(f.field_name),
     referenceRange: f.reference_range,
     abnormalFlag: f.abnormal_flag,
     state: f.validation_state,
@@ -91,11 +93,17 @@ function ReviewWorkspace({ id }) {
     queryClient.invalidateQueries({ queryKey: ['audit-logs'] });
   };
 
+  const [unconfirmed, setUnconfirmed] = useState(null); // { payload, fields }: warnings the server asks to confirm
   const completeMutation = useMutation({
     mutationFn: (data) => fetchApi(`/reviews/${id}/complete`, {
       method: 'POST',
       body: JSON.stringify(data)
     }),
+    onError: (err, payload) => {
+      if (err.status === 422 && err.detail?.code === 'UNCONFIRMED_WARNINGS') {
+        setUnconfirmed({ payload, fields: err.detail.fields });
+      }
+    },
     onSuccess: async () => {
       invalidateDocument();
       // Straight on to the next document waiting for review
@@ -134,6 +142,7 @@ function ReviewWorkspace({ id }) {
   const [activeFieldId, setActiveFieldId] = useState(null);
   const [editingFieldId, setEditingFieldId] = useState(null);
   const [corrections, setCorrections] = useState({});
+  const [unitCorrections, setUnitCorrections] = useState({});
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogType, setDialogType] = useState('APPROVE');
 
@@ -173,7 +182,7 @@ function ReviewWorkspace({ id }) {
   // Keyboard shortcuts (ignored while typing, editing a field or in a dialog)
   useEffect(() => {
     const onKeyDown = (e) => {
-      if (dialogOpen || editingFieldId || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (dialogOpen || unconfirmed || editingFieldId || e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target;
       if (target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target?.tagName)) return;
       const index = allFields.findIndex(f => f.id === selectedId);
@@ -234,19 +243,31 @@ function ReviewWorkspace({ id }) {
     .map(f => ({ id: f.id, name: f.name, value: `${f.value ?? ''} ${f.unit}`.trim(), state: f.state }));
   const correctedFields = allFields
     .filter(f => corrections[f.id] !== undefined)
-    .map(f => ({ id: f.id, name: f.name, original: f.value, newValue: corrections[f.id] }));
+    .map(f => ({
+      id: f.id, name: f.name, original: f.value, newValue: corrections[f.id],
+      originalUnit: f.unit, newUnit: unitCorrections[f.id],
+    }));
 
   const handleFieldSelect = (field) => {
     setActiveFieldId(field.id);
   };
 
-  const handleFieldEdit = (fieldId, newValue) => {
+  const handleFieldEdit = (fieldId, newValue, newUnit) => {
     setCorrections(prev => {
       const next = { ...prev };
       if (newValue === undefined) {
         delete next[fieldId];
       } else {
         next[fieldId] = newValue;
+      }
+      return next;
+    });
+    setUnitCorrections(prev => {
+      const next = { ...prev };
+      if (newValue === undefined || newUnit === undefined) {
+        delete next[fieldId];
+      } else {
+        next[fieldId] = newUnit;
       }
       return next;
     });
@@ -269,6 +290,7 @@ function ReviewWorkspace({ id }) {
         corrections: correctedFields.map(f => ({
           extracted_field_id: f.id,
           new_value: f.newValue === '' ? null : f.newValue,
+          new_unit: f.newUnit ?? null,
           reason: (reasons?.[f.id] || '').trim(),
         })),
         rejection_reason: null,
@@ -354,7 +376,7 @@ function ReviewWorkspace({ id }) {
         )}
       </div>
 
-      {(completeMutation.isError || releaseMutation.isError) && (
+      {(completeMutation.isError || releaseMutation.isError) && !unconfirmed && (
         <div className="px-4 py-2 text-sm bg-destructive/10 text-destructive border-b border-destructive/20">
           {formatErrorDetail(completeMutation.error || releaseMutation.error)}
         </div>
@@ -377,6 +399,7 @@ function ReviewWorkspace({ id }) {
           <ExtractionPanel
             extraction={extraction}
             corrections={isReadOnly ? {} : corrections}
+            unitCorrections={isReadOnly ? {} : unitCorrections}
             activeFieldId={selectedId}
             editingFieldId={isReadOnly ? null : editingFieldId}
             onFieldSelect={handleFieldSelect}
@@ -395,6 +418,18 @@ function ReviewWorkspace({ id }) {
         correctedFields={correctedFields}
         warnings={warnings}
         isSubmitting={completeMutation.isPending}
+      />
+      <ConfirmWarningsDialog
+        key={unconfirmed ? 'confirm-open' : 'confirm-closed'}
+        open={Boolean(unconfirmed)}
+        fields={unconfirmed?.fields || []}
+        isSubmitting={completeMutation.isPending}
+        onCancel={() => { setUnconfirmed(null); completeMutation.reset(); }}
+        onConfirm={() => {
+          const payload = { ...unconfirmed.payload, confirm_warnings: true };
+          setUnconfirmed(null);
+          completeMutation.mutate(payload);
+        }}
       />
     </div>
   );
