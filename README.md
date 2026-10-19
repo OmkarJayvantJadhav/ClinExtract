@@ -20,6 +20,7 @@ highlighted on the page.
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 
 [**Features**](#-features) ·
+[**Demo**](#-see-it-in-action) ·
 [**How it works**](#-how-it-works) ·
 [**Accuracy**](#-measured-accuracy) ·
 [**Quick start**](#-quick-start) ·
@@ -29,9 +30,9 @@ highlighted on the page.
 
 <br>
 
-<img src="docs/images/review-workspace.png" alt="Review workspace: the original report on the left with the misread hemoglobin highlighted, extracted fields on the right with a 'Check value' warning" width="100%">
+<img src="docs/images/review-workflow.gif" alt="Reviewing a flagged report: the misread hemoglobin value is corrected from the keyboard, approved with a reason, and the next document opens" width="100%">
 
-<sub><i>The review workspace: a misread hemoglobin value (1.48 instead of 14.8) is flagged, explained, and highlighted on the original report.</i></sub>
+<sub><i>A misread hemoglobin value (1.48 instead of 14.8) is flagged and highlighted on the original report, corrected from the keyboard, approved with a reason, and the next document opens on its own.</i></sub>
 
 </div>
 
@@ -129,24 +130,21 @@ eye, with the reason stated and the spot on the page highlighted.
 
 <br>
 
-## 📸 Screenshots
+## 🎬 See it in action
 
-<table>
-<tr>
-<td width="50%"><img src="docs/images/review-queue.png" alt="Review queue with a document marked 'Check first'"><p align="center"><sub><b>Review queue</b>: possible misreads first</sub></p></td>
-<td width="50%"><img src="docs/images/document-details.png" alt="Document page with abnormal results flagged against the report's reference ranges"><p align="center"><sub><b>Document page</b>: abnormal results flagged against the report's own ranges</sub></p></td>
-</tr>
-<tr>
-<td width="50%"><img src="docs/images/upload.png" alt="Batch upload with progress and a duplicate refused"><p align="center"><sub><b>Batch upload</b>: progress per file, duplicates caught</sub></p></td>
-<td width="50%"><img src="docs/images/library.png" alt="Document library with search, filters and CSV/JSON export"><p align="center"><sub><b>Library</b>: search, filters and CSV/JSON export</sub></p></td>
-</tr>
-</table>
+#### Batch upload, duplicate detection, library
 
-<details>
-<summary><b>Sign-in page with one-click demo accounts</b></summary>
-<br>
-<img src="docs/images/login.png" alt="Sign-in page with one-click demo accounts" width="100%">
-</details>
+Five files at once, with progress per file. The re-uploaded copy of a report is caught by its content hash
+before it is processed again; the library then shows which documents were auto-accepted and which need review.
+
+<img src="docs/images/batch-upload.gif" alt="Uploading five reports at once; a duplicate is refused, then the library shows auto-accepted and review-required documents" width="100%">
+
+#### One-click demo sign-in, abnormal results
+
+The sign-in page offers shared demo accounts. Abnormal results are flagged against the report's own
+reference ranges, with every action recorded in the document's audit history.
+
+<img src="docs/images/abnormal-results.gif" alt="Signing in with a demo account and opening a report whose abnormal results are flagged against its own reference ranges" width="100%">
 
 <br>
 
@@ -453,7 +451,7 @@ ClinExtract/
 │       ├── features/review/  # Review workspace: viewer, fields, decision dialogs
 │       ├── pages/            # Dashboard, library, upload, queue, settings, ...
 │       └── services/         # API client
-├── docs/                     # Guides, deployment, diagrams, screenshots
+├── docs/                     # Guides, deployment, diagrams, demo GIFs
 ├── scripts/                  # Server setup, backup, restore
 ├── docker-compose.yml        # Development stack
 └── docker-compose.prod.yml   # Production stack
