@@ -9,6 +9,10 @@
 	}
 
 	handle /api/* {
+		# Documents are at most 10 MB; refuse larger bodies before they reach the backend
+		request_body {
+			max_size 11MiB
+		}
 		reverse_proxy backend:8000 {
 			# The backend trusts X-Real-IP (TRUST_PROXY_HEADERS=true) for rate limiting and audit
 			header_up X-Real-IP {remote_host}
