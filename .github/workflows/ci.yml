@@ -50,6 +50,7 @@ jobs:
           DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/clinextract_migrations alembic upgrade head
           DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/clinextract_migrations alembic check
           DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/clinextract_migrations alembic downgrade base
+          DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/clinextract_migrations alembic upgrade head
       - name: Tests
         run: pytest -q -p no:cacheprovider
 

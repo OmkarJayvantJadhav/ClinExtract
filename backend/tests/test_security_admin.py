@@ -37,8 +37,11 @@ def test_account_locks_after_repeated_failures(admin, new_user):
     for _ in range(5):
         _, r = login(new_user["username"], "wrong-password")
         assert r.status_code == 401
-    _, r = login(new_user["username"], STRONG)
-    assert r.status_code == 429  # locked even with the right password
+    _, locked = login(new_user["username"], STRONG)
+    _, unknown = login("no_such_user_xyz", STRONG)
+    # Refused even with the right password, and indistinguishable from an unknown username
+    assert locked.status_code == unknown.status_code == 401
+    assert locked.json() == unknown.json()
 
     listed = {u["id"]: u for u in admin.get("/api/v1/users").json()}
     assert listed[new_user["id"]]["locked_until"] is not None
@@ -47,10 +50,19 @@ def test_account_locks_after_repeated_failures(admin, new_user):
     _, r = login(new_user["username"], STRONG)
     assert r.status_code == 200
 
-def test_unknown_user_gets_generic_error():
+def test_unknown_user_gets_generic_error(admin):
     _, r = login("no_such_user_xyz", "whatever")
     assert r.status_code == 401
-    assert r.json()["detail"] == "Incorrect username or password"
+    assert r.json()["detail"].startswith("Incorrect username or password")
+    events = admin.get("/api/v1/audit", params={"action": "USER_LOGIN_FAILED"}).json()["items"]
+    assert any((e["changes"]["after"] or {}).get("username") == "no_such_user_xyz" for e in events)
+
+
+def test_deactivated_account_does_not_reveal_a_right_password(admin, new_user):
+    assert admin.patch(f"/api/v1/users/{new_user['id']}", json={"is_active": False}).status_code == 200
+    _, right = login(new_user["username"], STRONG)
+    _, wrong = login(new_user["username"], "Wr0ng-Passw0rd!")
+    assert right.status_code == wrong.status_code == 401 and right.json() == wrong.json()
 
 
 # --- password change / session revocation --------------------------------------

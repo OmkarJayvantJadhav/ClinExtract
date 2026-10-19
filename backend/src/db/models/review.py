@@ -14,7 +14,7 @@ class ReviewStatus(str, enum.Enum):
 class Review(BaseModel):
     __tablename__ = "reviews"
 
-    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("documents.id"))
+    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("documents.id"), index=True)
     reviewer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=True)
     status: Mapped[ReviewStatus] = mapped_column(Enum(ReviewStatus, name="review_status_enum"), default=ReviewStatus.NOT_STARTED)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -73,16 +73,35 @@ async def purge_document(
     )
     return storage_key
 
+# Documents purged per transaction
+PURGE_BATCH = 100
+
 async def purge_expired_documents(db: AsyncSession, storage: StorageService, retention_days: int, now: Optional[datetime] = None) -> int:
-    """Purges finalized documents older than `retention_days`. Returns how many were removed."""
+    """
+    Purges every finalized document older than `retention_days`, in batches (a fixed number per
+    daily run could fall further behind every day). Each batch is locked, skipping documents
+    another request holds, e.g. a failed one being retried, which then is no longer final.
+    Returns how many were removed.
+    """
     if retention_days <= 0:
         return 0
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=retention_days)
-    stmt = select(Document).where(Document.status.in_(FINAL_STATUSES), Document.created_at < cutoff).limit(500)
-    documents = (await db.execute(stmt)).scalars().all()
-    for document in documents:
-        storage_key = await purge_document(db, document, actor_id=None, reason=f"retention policy ({retention_days} days)")
+    stmt = (
+        select(Document)
+        .where(Document.status.in_(FINAL_STATUSES), Document.created_at < cutoff)
+        .order_by(Document.created_at)
+        .limit(PURGE_BATCH)
+        .with_for_update(skip_locked=True)
+    )
+    total = 0
+    while documents := (await db.execute(stmt)).scalars().all():
+        storage_keys = [
+            await purge_document(db, document, actor_id=None, reason=f"retention policy ({retention_days} days)")
+            for document in documents
+        ]
         await db.commit()
         # Files are removed only after the rows are gone; an orphaned file is encrypted and harmless
-        await storage.delete_document_files(storage_key)
-    return len(documents)
+        for storage_key in storage_keys:
+            await storage.delete_document_files(storage_key)
+        total += len(documents)
+    return total

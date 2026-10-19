@@ -138,3 +138,6 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_users_username'), table_name='users')
     op.drop_table('users')
     # ### end Alembic commands ###
+    # The enum types created with the tables (otherwise a later upgrade fails: "already exists")
+    for name in ('review_status_enum', 'job_status_enum', 'document_status_enum', 'user_role_enum'):
+        sa.Enum(name=name).drop(op.get_bind(), checkfirst=True)

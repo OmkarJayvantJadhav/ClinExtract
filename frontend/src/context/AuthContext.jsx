@@ -66,8 +66,8 @@ export function AuthProvider({ children }) {
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         const detail = typeof body.detail === 'string' ? body.detail : null;
-        if (response.status === 401) throw new Error('Invalid username or password');
-        // 429: rate limited or account locked; the server explains which
+        // 401 covers a wrong password, an unknown user and a locked account alike; 429 is
+        // the per-address rate limit. The server's message explains.
         throw new Error(detail || `Login failed (${response.status})`);
       }
       // Never show one user's cached data to the next

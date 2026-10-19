@@ -12,7 +12,7 @@ import filetype
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Request, Query
 from fastapi.responses import Response
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -177,6 +177,9 @@ def _final_flag(f: ExtractedField) -> str | None:
     value, lower, upper = meta.get("value"), meta.get("lower"), meta.get("upper")
     if value is None:
         return None
+    if lower is None and upper is None:
+        # A value beyond any plausible result (confirmed by a reviewer) carries only those limits
+        lower, upper = meta.get("plausible_lower"), meta.get("plausible_upper")
     return "H" if upper is not None and value > upper else "L" if lower is not None and value < lower else None
 
 def _export_field(f: ExtractedField) -> dict:
@@ -221,6 +224,12 @@ async def export_documents(
     reviewed values: corrections applied, results normalized to their canonical units.
     """
     statuses = status or FINAL_STATUSES
+    matching = await db.scalar(select(func.count()).select_from(_filtered(statuses, q, created_from, created_to).subquery()))
+    if matching > EXPORT_LIMIT:
+        # Refused rather than cut off: a partial export would silently miss documents
+        raise HTTPException(status_code=422, detail=(
+            f"{matching} documents match; an export is limited to {EXPORT_LIMIT}. Narrow the date range or filters."
+        ))
     query = (
         _filtered(statuses, q, created_from, created_to)
         .order_by(Document.created_at.asc(), Document.id)
@@ -291,6 +300,9 @@ async def upload_document(
     file_size = len(file_bytes)
     content_hash = hashlib.sha256(file_bytes).hexdigest()
     if not allow_duplicate:
+        # Until this upload commits: two identical files sent at the same moment would otherwise
+        # both pass the check
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"upload:{content_hash}"})
         existing = (await db.execute(
             select(Document).where(Document.content_hash == content_hash).order_by(Document.created_at).limit(1)
         )).scalar_one_or_none()
@@ -440,6 +452,8 @@ async def delete_document(
     Permanently delete a document, its files and all derived data (admin only).
     Audit events are kept with their payloads redacted.
     """
+    if len(reason.strip()) < 3:
+        raise HTTPException(status_code=422, detail="A reason for the deletion is required")
     stmt = select(Document).where(Document.id == document_id).with_for_update()
     doc = (await db.execute(stmt)).scalar_one_or_none()
     if not doc:

@@ -6,7 +6,7 @@ from src.db.base import BaseModel
 class FieldCorrection(BaseModel):
     __tablename__ = "field_corrections"
 
-    extracted_field_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("extracted_fields.id"))
+    extracted_field_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("extracted_fields.id"), index=True)
     review_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("reviews.id"))
     previous_value: Mapped[str] = mapped_column(String, nullable=True)
     new_value: Mapped[str] = mapped_column(String, nullable=True)
