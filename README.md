@@ -20,6 +20,7 @@ highlighted on the page.
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 
 [**Features**](#-features) ·
+[**Demo**](#-see-it-in-action) ·
 [**How it works**](#-how-it-works) ·
 [**Accuracy**](#-measured-accuracy) ·
 [**Quick start**](#-quick-start) ·
@@ -29,9 +30,9 @@ highlighted on the page.
 
 <br>
 
-<img src="docs/images/review-workspace.png" alt="Review workspace: the original report on the left with the misread hemoglobin highlighted, extracted fields on the right with a 'Check value' warning" width="100%">
+<img src="docs/images/review-workflow.gif" alt="Reviewing a flagged report: the misread hemoglobin value is corrected from the keyboard, approved with a reason, and the next document opens" width="100%">
 
-<sub><i>The review workspace: a misread hemoglobin value (1.48 instead of 14.8) is flagged, explained, and highlighted on the original report.</i></sub>
+<sub><i>A misread hemoglobin value (1.48 instead of 14.8) is flagged and highlighted on the original report, corrected from the keyboard, approved with a reason, and the next document opens on its own.</i></sub>
 
 </div>
 
@@ -129,24 +130,31 @@ eye, with the reason stated and the spot on the page highlighted.
 
 <br>
 
-## 📸 Screenshots
+## 🎬 See it in action
 
-<table>
-<tr>
-<td width="50%"><img src="docs/images/review-queue.png" alt="Review queue with a document marked 'Check first'"><p align="center"><sub><b>Review queue</b>: possible misreads first</sub></p></td>
-<td width="50%"><img src="docs/images/document-details.png" alt="Document page with abnormal results flagged against the report's reference ranges"><p align="center"><sub><b>Document page</b>: abnormal results flagged against the report's own ranges</sub></p></td>
-</tr>
-<tr>
-<td width="50%"><img src="docs/images/upload.png" alt="Batch upload with progress and a duplicate refused"><p align="center"><sub><b>Batch upload</b>: progress per file, duplicates caught</sub></p></td>
-<td width="50%"><img src="docs/images/library.png" alt="Document library with search, filters and CSV/JSON export"><p align="center"><sub><b>Library</b>: search, filters and CSV/JSON export</sub></p></td>
-</tr>
-</table>
+Recorded on the full stack (API, RabbitMQ, Celery worker and scheduler, PostgreSQL) with the
+synthetic sample reports.
 
-<details>
-<summary><b>Sign-in page with one-click demo accounts</b></summary>
-<br>
-<img src="docs/images/login.png" alt="Sign-in page with one-click demo accounts" width="100%">
-</details>
+#### 1. Upload and live processing
+
+An operator signs in with a demo account (every service reports healthy) and uploads six reports at
+once. The re-uploaded copy of a report is caught by its content hash. The scanned report then moves
+through **Queued → Processing → Auto Accepted** on the worker while its page updates live, and the
+library shows the outcome of every document.
+
+<img src="docs/images/upload-and-processing.gif" alt="Uploading six reports, a duplicate refused, a scanned report processed live by the worker, and the library with the final statuses" width="100%">
+
+#### 2. Review
+
+Shown at the top of this page: the misread value is checked first, corrected from the keyboard and
+approved with a reason, and the next document opens.
+
+#### 3. Dashboard and results
+
+An admin sees the processing metrics and the health of every service, then opens a report whose
+abnormal results are flagged against the report's own reference ranges.
+
+<img src="docs/images/dashboard.gif" alt="Admin dashboard with processing metrics and healthy services, then a report with abnormal results flagged" width="100%">
 
 <br>
 
@@ -453,7 +461,7 @@ ClinExtract/
 │       ├── features/review/  # Review workspace: viewer, fields, decision dialogs
 │       ├── pages/            # Dashboard, library, upload, queue, settings, ...
 │       └── services/         # API client
-├── docs/                     # Guides, deployment, diagrams, screenshots
+├── docs/                     # Guides, deployment, diagrams, demo GIFs
 ├── scripts/                  # Server setup, backup, restore
 ├── docker-compose.yml        # Development stack
 └── docker-compose.prod.yml   # Production stack
