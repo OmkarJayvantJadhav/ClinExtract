@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # A job left RUNNING longer than this (e.g. the worker died) is considered abandoned
     # and may be picked up again when the broker redelivers it.
     JOB_STALE_AFTER_MINUTES: int = 15
+    # A job whose worker died this many times (the sweep restarted it each time) is marked
+    # FAILED: the document itself probably crashes the worker (memory, a native library).
+    MAX_JOB_RECOVERIES: int = 2
     # A QUEUED or RETRYING job with no progress for this long is sent to the worker again
     # (its message was lost, e.g. a broker restart). Checked every 10 minutes.
     STUCK_JOB_MINUTES: int = 15
