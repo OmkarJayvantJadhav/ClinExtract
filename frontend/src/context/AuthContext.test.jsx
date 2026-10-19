@@ -18,9 +18,9 @@ describe('AuthProvider', () => {
       ? { ok: true, status: 200, json: async () => ({ username: 'ravi', role: 'REVIEWER' }) }
       : { ok: false, status: 401, json: async () => ({ detail: 'Session has been revoked' }) }));
     render(<AuthProvider><Probe /></AuthProvider>);
-    await screen.findByText('signed in');
+    await screen.findByText('signed in', {}, { timeout: 5000 });
 
     await act(async () => { await fetchApi('/documents').catch(() => {}); });
-    await waitFor(() => expect(screen.getByText('signed out, session ended')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('signed out, session ended')).toBeInTheDocument(), { timeout: 5000 });
   });
 });

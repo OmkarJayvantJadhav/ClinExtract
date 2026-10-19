@@ -64,6 +64,12 @@ export function Library() {
   const docs = data?.items || [];
   const pages = data?.pages || 1;
 
+  // Back to the last page when the results shrink under the current one (a deletion, or a
+  // document leaving the filtered status while the list refreshes)
+  if (data && data.pages > 0 && page > data.pages) {
+    setPage(data.pages);
+  }
+
   return (
     <div className="flex flex-col gap-6 w-full h-full">
       <div className="flex items-center justify-between">

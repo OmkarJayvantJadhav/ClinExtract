@@ -4,11 +4,12 @@ function filterParams({ q, status, from, to }) {
   const params = new URLSearchParams();
   if (q?.trim()) params.set('q', q.trim());
   if (status && status !== 'ALL') params.set('status', status);
-  if (from) params.set('created_from', `${from}T00:00:00Z`);
+  // Days in the user's time zone, as the table shows upload dates
+  if (from) params.set('created_from', new Date(`${from}T00:00:00`).toISOString());
   if (to) {
     // inclusive end date: everything before the following midnight
-    const end = new Date(`${to}T00:00:00Z`);
-    end.setUTCDate(end.getUTCDate() + 1);
+    const end = new Date(`${to}T00:00:00`);
+    end.setDate(end.getDate() + 1);
     params.set('created_to', end.toISOString());
   }
   return params;

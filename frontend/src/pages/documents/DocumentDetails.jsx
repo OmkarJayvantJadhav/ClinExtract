@@ -5,7 +5,7 @@ import { fetchApi, getDocumentAudit, apiUrl } from '@/services/apiClient';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { DocumentStatusBadge, ConfidenceIndicator, ValidationBadge } from '@/components/common/StatusPrimitives';
-import { EmptyState } from '@/components/common/FeedbackStates';
+import { EmptyState, ErrorState } from '@/components/common/FeedbackStates';
 import { ArrowLeft, Edit, Clock, Download, Loader2, User, Trash2, RotateCcw } from 'lucide-react';
 import { DeleteDocumentDialog } from '@/features/documents/DeleteDocumentDialog';
 import { useAuth } from '@/context/AuthContext';
@@ -24,7 +24,7 @@ export function DocumentDetails() {
   });
 
   // Real API Fetch with Polling
-  const { data: doc, isLoading, error } = useQuery({
+  const { data: doc, isLoading, error, refetch } = useQuery({
     queryKey: ['document', id],
     queryFn: () => fetchApi(`/documents/${id}`),
     // Poll every 3 seconds while document is processing/queued.
@@ -65,6 +65,10 @@ export function DocumentDetails() {
   const patientName = fieldValue('patient_name');
   const patientId = fieldValue('patient_id');
 
+  if (error && error.status !== 404) {
+    // e.g. the server is unreachable: the document may well exist
+    return <ErrorState message={error.message} onRetry={refetch} />;
+  }
   if (error || !doc) {
     return <EmptyState title="Document Not Found" message={`Could not locate document ID ${id}`} />;
   }

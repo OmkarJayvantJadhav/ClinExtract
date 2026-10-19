@@ -115,6 +115,8 @@ export function AuthProvider({ children }) {
     isAuthenticated,
     isLoading,
     sessionEnded,
+    // Re-reads the signed-in user from the server (e.g. after changing the password)
+    refreshUser: checkSession,
     login,
     logout,
     hasRole
