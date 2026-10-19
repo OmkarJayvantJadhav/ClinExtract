@@ -58,10 +58,11 @@ async def get_analytics_metrics(
     )
     
     # Extraction Fallbacks
-    # Count extractions where fallback_metadata is not null and has original_extractor
+    # Count extractions that recorded a fallback. No fallback is stored as a JSON null, which
+    # IS NOT NULL would count, so match the recorded object instead.
     fallback_count = await db.scalar(
         select(func.count()).select_from(Extraction)
-        .where(Extraction.fallback_metadata.is_not(None))
+        .where(func.jsonb_typeof(Extraction.fallback_metadata) == "object")
     )
     
     # Human Correction Rate
