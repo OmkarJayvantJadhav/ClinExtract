@@ -132,19 +132,29 @@ eye, with the reason stated and the spot on the page highlighted.
 
 ## 🎬 See it in action
 
-#### Batch upload, duplicate detection, library
+Recorded on the full stack (API, RabbitMQ, Celery worker and scheduler, PostgreSQL) with the
+synthetic sample reports.
 
-Five files at once, with progress per file. The re-uploaded copy of a report is caught by its content hash
-before it is processed again; the library then shows which documents were auto-accepted and which need review.
+#### 1. Upload and live processing
 
-<img src="docs/images/batch-upload.gif" alt="Uploading five reports at once; a duplicate is refused, then the library shows auto-accepted and review-required documents" width="100%">
+An operator signs in with a demo account (every service reports healthy) and uploads six reports at
+once. The re-uploaded copy of a report is caught by its content hash. The scanned report then moves
+through **Queued → Processing → Auto Accepted** on the worker while its page updates live, and the
+library shows the outcome of every document.
 
-#### One-click demo sign-in, abnormal results
+<img src="docs/images/upload-and-processing.gif" alt="Uploading six reports, a duplicate refused, a scanned report processed live by the worker, and the library with the final statuses" width="100%">
 
-The sign-in page offers shared demo accounts. Abnormal results are flagged against the report's own
-reference ranges, with every action recorded in the document's audit history.
+#### 2. Review
 
-<img src="docs/images/abnormal-results.gif" alt="Signing in with a demo account and opening a report whose abnormal results are flagged against its own reference ranges" width="100%">
+Shown at the top of this page: the misread value is checked first, corrected from the keyboard and
+approved with a reason, and the next document opens.
+
+#### 3. Dashboard and results
+
+An admin sees the processing metrics and the health of every service, then opens a report whose
+abnormal results are flagged against the report's own reference ranges.
+
+<img src="docs/images/dashboard.gif" alt="Admin dashboard with processing metrics and healthy services, then a report with abnormal results flagged" width="100%">
 
 <br>
 
