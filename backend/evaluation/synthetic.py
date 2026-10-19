@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from typing import Dict, List, Optional
 
 import cv2
-import fitz
+import pymupdf
 import numpy as np
 
 FIRST = ["Aarav", "Meera", "Rohan", "Ananya", "Vikram", "Kavya", "Arjun", "Isha", "Kabir", "Diya",
@@ -66,7 +66,7 @@ def _fmt(value: float, decimals: int) -> str:
     return f"{value:.{decimals}f}"
 
 
-def _draw(page: fitz.Page, header: List[str], rows: List[List[str]], layout: str, results_as_image: bool) -> None:
+def _draw(page: pymupdf.Page, header: List[str], rows: List[List[str]], layout: str, results_as_image: bool) -> None:
     page.insert_text((50, 60), "Riverside Clinical Laboratory (fictional)", fontsize=15)
     page.insert_text((50, 80), "Hematology and Chemistry Report", fontsize=11)
     y = 120
@@ -76,7 +76,7 @@ def _draw(page: fitz.Page, header: List[str], rows: List[List[str]], layout: str
     y += 20
     target, ty = page, y
     if results_as_image:
-        pic = fitz.open()
+        pic = pymupdf.open()
         target = pic.new_page(width=510, height=180)
         ty = 25
     if layout == "colon":
@@ -96,12 +96,12 @@ def _draw(page: fitz.Page, header: List[str], rows: List[List[str]], layout: str
                     target.insert_text((x0 + x, ty), text, fontsize=11)
     if results_as_image:
         png = target.get_pixmap(dpi=200).tobytes("png")
-        page.insert_image(fitz.Rect(50, y - 15, 560, y + 165), stream=png)
+        page.insert_image(pymupdf.Rect(50, y - 15, 560, y + 165), stream=png)
     page.insert_text((50, 780), "SYNTHETIC TEST DOCUMENT - not a real patient", fontsize=8)
 
 
 def _scan(pdf_bytes: bytes, rng: random.Random) -> bytes:
-    pix = fitz.open(stream=pdf_bytes, filetype="pdf")[0].get_pixmap(dpi=rng.choice([200, 300]))
+    pix = pymupdf.open(stream=pdf_bytes, filetype="pdf")[0].get_pixmap(dpi=rng.choice([200, 300]))
     img = cv2.cvtColor(np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, pix.n), cv2.COLOR_RGB2BGR)
     h, w = img.shape[:2]
     img = cv2.warpAffine(img, cv2.getRotationMatrix2D((w / 2, h / 2), rng.uniform(-2, 2), 1.0), (w, h),
@@ -158,7 +158,7 @@ def make_case(index: int, seed: int = 0) -> Case:
         f"{coll_label}: {collected.strftime(date_fmt)}    Received Date: {received.strftime(date_fmt)}",
     ]
 
-    doc = fitz.open()
+    doc = pymupdf.open()
     _draw(doc.new_page(), header, rows, layout, results_as_image=(media == "mixed"))
     pdf = doc.write(deflate=True, garbage=3)
     data, mime = (_scan(pdf, rng), "image/jpeg") if media == "scan" else (pdf, "application/pdf")

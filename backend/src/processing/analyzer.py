@@ -2,7 +2,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-import fitz
+import pymupdf
 from src.core.config import settings
 from src.processing.native_pdf import process_native_page
 from src.processing.scanned_image import process_scanned_page
@@ -22,13 +22,13 @@ MIN_OCR_IMAGE_FRACTION = 0.05
 class DocumentProcessingError(ValueError):
     """The document itself cannot be processed (corrupt, encrypted, too large). Retrying will not help."""
 
-def _image_regions(page: fitz.Page) -> list:
+def _image_regions(page: pymupdf.Page) -> list:
     """Page areas covered by embedded images large enough to hold text worth reading."""
     page_rect = page.rect
     page_area = page_rect.width * page_rect.height
     regions = []
     for info in page.get_image_info():
-        rect = fitz.Rect(info["bbox"]) & page_rect
+        rect = pymupdf.Rect(info["bbox"]) & page_rect
         if rect.is_empty or not page_area:
             continue
         if rect.width * rect.height / page_area < MIN_OCR_IMAGE_FRACTION:
@@ -38,11 +38,11 @@ def _image_regions(page: fitz.Page) -> list:
         regions.append(rect)
     return regions
 
-def _render_image_regions(page: fitz.Page) -> list:
+def _render_image_regions(page: pymupdf.Page) -> list:
     """(clip rect, PNG) for each large image on a native-text page, rendered for OCR."""
     zoom = OCR_RENDER_DPI / 72.0
     return [
-        (clip, page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, alpha=False).tobytes("png"))
+        (clip, page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip, alpha=False).tobytes("png"))
         for clip in _image_regions(page)
     ]
 
@@ -114,7 +114,7 @@ class DocumentAnalyzer:
 
         if mime_type == "application/pdf":
             try:
-                doc = fitz.Document(stream=file_bytes, filetype="pdf")
+                doc = pymupdf.Document(stream=file_bytes, filetype="pdf")
             except Exception as e:
                 raise DocumentProcessingError(f"Could not open PDF: {e}") from e
 
@@ -140,7 +140,7 @@ class DocumentAnalyzer:
                         # Scanned PDF page: render to image at OCR resolution
                         zoom = OCR_RENDER_DPI / 72.0
                         plans.append(("scanned", None, None, len(tasks)))
-                        tasks.append((page.get_pixmap(matrix=fitz.Matrix(zoom, zoom)).tobytes("png"), number))
+                        tasks.append((page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom)).tobytes("png"), number))
             finally:
                 doc.close()
 

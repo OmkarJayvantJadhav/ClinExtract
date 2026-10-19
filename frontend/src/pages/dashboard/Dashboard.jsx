@@ -31,7 +31,8 @@ export function Dashboard() {
     refetchInterval: 30000
   });
 
-  if (analyticsLoading || healthLoading || docsLoading) {
+  // The health check can be slow while a service is down; it fills in its own card
+  if (analyticsLoading || docsLoading) {
     return (
       <div className="flex h-full w-full items-center justify-center p-8">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -85,7 +86,7 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{(stats.review.correction_rate * 100).toFixed(1)}%</div>
-            <p className="text-xs text-muted-foreground">Fields modified by users</p>
+            <p className="text-xs text-muted-foreground">Reviewed documents corrected</p>
           </CardContent>
         </Card>
         <Card>
@@ -156,7 +157,12 @@ export function Dashboard() {
                 </div>
               </div>
             )}
-            {!health && <p className="text-muted-foreground">Unable to fetch system health.</p>}
+            {!health && healthLoading && (
+              <p className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Checking services…
+              </p>
+            )}
+            {!health && !healthLoading && <p className="text-muted-foreground">Unable to fetch system health.</p>}
           </CardContent>
         </Card>
       </div>

@@ -124,11 +124,11 @@ def test_duplicate_upload_is_refused_unless_allowed(client):
 
 
 def _lab_pdf(lines):
-    import fitz
-    doc = fitz.open()
+    import pymupdf
+    doc = pymupdf.open()
     page = doc.new_page()
     for i, line in enumerate(lines):
-        page.insert_text(fitz.Point(50, 50 + 18 * i), line, fontsize=11)
+        page.insert_text(pymupdf.Point(50, 50 + 18 * i), line, fontsize=11)
     return doc.write()
 
 

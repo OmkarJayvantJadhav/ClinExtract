@@ -92,8 +92,8 @@ def test_vlm_sends_raw_png_bytes_with_png_mime(monkeypatch):
 
 
 def test_vlm_renders_pdf_pages_as_jpeg(monkeypatch):
-    import fitz
-    doc = fitz.open()
+    import pymupdf
+    doc = pymupdf.open()
     doc.new_page().insert_text((50, 50), "Glucose: 92 mg/dL")
     doc.new_page().insert_text((50, 50), "Page two")
     provider = make_provider(monkeypatch, GOOD_OUTPUT)

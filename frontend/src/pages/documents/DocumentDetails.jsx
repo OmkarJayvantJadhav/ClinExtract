@@ -153,7 +153,7 @@ export function DocumentDetails() {
           <Card>
             <CardHeader>
               <CardTitle>Extraction Summary</CardTitle>
-              <CardDescription>AI extracted fields from the document</CardDescription>
+              <CardDescription>Fields extracted from the document</CardDescription>
             </CardHeader>
             <CardContent>
               {!extraction ? (

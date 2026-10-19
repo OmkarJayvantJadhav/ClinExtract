@@ -366,6 +366,7 @@ Settings are environment variables (a `.env` file next to `docker-compose.yml`, 
 | `EXTRACTION_FALLBACK_ENABLED` | `false` | Fall back to the rule-based engine if the AI engine fails |
 | `DATE_ORDER` | `MDY` | How to read 03/04/2025: `MDY` (March 4) or `DMY` (3 April) |
 | `OCR_WORKERS` | CPUs, max 4 | Pages of one document OCR'd in parallel |
+| `OCR_PAGE_TIMEOUT_SECONDS` | `60` | Stop OCR of a page after this long; the document fails and can be retried |
 | `API_WORKERS` / `WORKER_CONCURRENCY` | `2` / `2` | API processes and concurrent documents (production) |
 | `STUCK_JOB_MINUTES` | `15` | Re-send a queued job idle this long |
 | `DOCUMENT_RETENTION_DAYS` | `0` (off) | Purge finished documents after this many days |
