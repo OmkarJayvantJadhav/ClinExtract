@@ -191,3 +191,14 @@ def test_small_images_on_text_pages_are_not_ocrd():
 
     page_data = DocumentAnalyzer.process(doc.write(), "application/pdf", "doc", "job")["pages"][0]
     assert page_data["source_type"] == "PDF_NATIVE" and not page_data["ocr_used"]
+
+
+def test_ocr_timeout_fails_the_document_instead_of_hanging(monkeypatch, fake_scanned_png_bytes):
+    import time
+    from src.core.config import settings
+    from src.processing.analyzer import DocumentAnalyzer, DocumentProcessingError
+    monkeypatch.setattr(settings, "OCR_PAGE_TIMEOUT_SECONDS", 0.001)
+    start = time.time()
+    with pytest.raises(DocumentProcessingError, match="OCR of page 1 took longer than"):
+        DocumentAnalyzer.process(fake_scanned_png_bytes, "image/png", "doc", "job")
+    assert time.time() - start < 10
