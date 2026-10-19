@@ -10,7 +10,7 @@ import os
 import sys
 
 import cv2
-import fitz
+import pymupdf
 import numpy as np
 
 LAB_NAME = "Northfield Diagnostics (fictional)"
@@ -49,7 +49,7 @@ def _flag(value: str, ref: str) -> str:
         return ""
     return "H" if number > upper else "L" if number < lower else ""
 
-def _draw_report(page: fitz.Page, report: dict, results_as_image: bool = False) -> None:
+def _draw_report(page: pymupdf.Page, report: dict, results_as_image: bool = False) -> None:
     y = 60
     page.insert_text((50, y), LAB_NAME, fontsize=16)
     page.insert_text((50, y + 20), "Laboratory Report - Complete Blood Count and Glucose", fontsize=11)
@@ -71,17 +71,17 @@ def _draw_report(page: fitz.Page, report: dict, results_as_image: bool = False) 
     if results_as_image:
         # Results pasted in as a picture (no text layer), as when a scanned table is attached
         # under a typed header.
-        picture = fitz.open()
+        picture = pymupdf.open()
         table_page = picture.new_page(width=510, height=150)
         _draw_results(table_page, report["results"], 25)
         picture_bytes = table_page.get_pixmap(dpi=200).tobytes("png")
-        page.insert_image(fitz.Rect(50, y - 10, 560, y + 140), stream=picture_bytes)
+        page.insert_image(pymupdf.Rect(50, y - 10, 560, y + 140), stream=picture_bytes)
     else:
         _draw_results(page, report["results"], y)
 
     page.insert_text((50, 780), FOOTER, fontsize=8)
 
-def _draw_results(page: fitz.Page, results, y: float) -> None:
+def _draw_results(page: pymupdf.Page, results, y: float) -> None:
     columns = (0, 200, 255, 295, 385)
     for x, title in zip(columns, ("Test", "Result", "Flag", "Unit", "Reference Range")):
         page.insert_text((50 + x, y), title, fontsize=11)
@@ -93,13 +93,13 @@ def _draw_results(page: fitz.Page, results, y: float) -> None:
                 page.insert_text((50 + x, y), text, fontsize=11)
 
 def _pdf(report: dict, results_as_image: bool = False) -> bytes:
-    doc = fitz.open()
+    doc = pymupdf.open()
     _draw_report(doc.new_page(), report, results_as_image)
     return doc.write(deflate=True, garbage=3)
 
 def _scanned_jpeg(report: dict) -> bytes:
     """Rendered page, slightly rotated and noisy, as a phone or flatbed scan would be."""
-    doc = fitz.open(stream=_pdf(report), filetype="pdf")
+    doc = pymupdf.open(stream=_pdf(report), filetype="pdf")
     pix = doc[0].get_pixmap(dpi=300)
     img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)

@@ -128,10 +128,10 @@ class _PagedProvider:
 
 
 def test_vlm_merges_fields_across_pages():
-    import fitz
+    import pymupdf
     from src.extraction.vlm import VLMExtractor
 
-    doc = fitz.open()
+    doc = pymupdf.open()
     doc.new_page()
     doc.new_page()
     provider = _PagedProvider([

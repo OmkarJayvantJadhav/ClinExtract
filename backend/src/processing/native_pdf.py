@@ -1,6 +1,6 @@
-import fitz
+import pymupdf
 
-def process_native_page(page: fitz.Page) -> dict:
+def process_native_page(page: pymupdf.Page) -> dict:
     """
     Extracts text and normalized bounding boxes from a native PDF page.
     """

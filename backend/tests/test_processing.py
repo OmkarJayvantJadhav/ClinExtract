@@ -11,10 +11,10 @@ from src.storage import get_storage_service
 @pytest.fixture
 def fake_pdf_bytes():
     # A simple valid PDF
-    import fitz
-    doc = fitz.open()
+    import pymupdf
+    doc = pymupdf.open()
     page = doc.new_page()
-    page.insert_text(fitz.Point(50, 50), "Patient Name: John Doe", fontsize=12)
+    page.insert_text(pymupdf.Point(50, 50), "Patient Name: John Doe", fontsize=12)
     return doc.write()
 
 @pytest.fixture
@@ -150,15 +150,15 @@ async def test_process_scanned_image(db_session, user, fake_scanned_png_bytes):
 
 def _mixed_page_pdf() -> bytes:
     """A typed header with the results pasted underneath as a picture (no text layer)."""
-    import fitz
-    results = fitz.open()
+    import pymupdf
+    results = pymupdf.open()
     results.new_page(width=400, height=150).insert_text((20, 60), "Glucose: 92 mg/dL", fontsize=24)
     picture = results[0].get_pixmap(dpi=200).tobytes("png")
 
-    doc = fitz.open()
+    doc = pymupdf.open()
     page = doc.new_page()
     page.insert_text((50, 60), "City Lab Report - Patient Name: Jane Doe", fontsize=12)
-    page.insert_image(fitz.Rect(50, 100, 450, 250), stream=picture)
+    page.insert_image(pymupdf.Rect(50, 100, 450, 250), stream=picture)
     return doc.write()
 
 
@@ -180,14 +180,14 @@ def test_mixed_page_reads_text_inside_images():
 
 
 def test_small_images_on_text_pages_are_not_ocrd():
-    import fitz
+    import pymupdf
     from src.processing.analyzer import DocumentAnalyzer
-    logo = fitz.open()
+    logo = pymupdf.open()
     logo.new_page(width=40, height=40).insert_text((5, 25), "LOGO", fontsize=10)
-    doc = fitz.open()
+    doc = pymupdf.open()
     page = doc.new_page()
     page.insert_text((50, 60), "Patient Name: Jane Doe  Glucose: 92 mg/dL", fontsize=12)
-    page.insert_image(fitz.Rect(500, 20, 540, 60), stream=logo[0].get_pixmap().tobytes("png"))
+    page.insert_image(pymupdf.Rect(500, 20, 540, 60), stream=logo[0].get_pixmap().tobytes("png"))
 
     page_data = DocumentAnalyzer.process(doc.write(), "application/pdf", "doc", "job")["pages"][0]
     assert page_data["source_type"] == "PDF_NATIVE" and not page_data["ocr_used"]

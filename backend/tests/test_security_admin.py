@@ -122,9 +122,9 @@ def test_threshold_settings(admin, new_user):
 # --- documents: search, view audit, deletion ------------------------------------
 
 def _pdf(text):
-    import fitz
-    doc = fitz.open()
-    doc.new_page().insert_text(fitz.Point(50, 50), text, fontsize=12)
+    import pymupdf
+    doc = pymupdf.open()
+    doc.new_page().insert_text(pymupdf.Point(50, 50), text, fontsize=12)
     return doc.write()
 
 def test_search_view_logging_and_delete(admin):
@@ -203,12 +203,12 @@ def test_list_documents_oldest_first(admin):
     assert admin.get("/api/v1/documents", params={"sort": "random"}).status_code == 422
 
 def test_reprocess_failed_document(admin, new_user, monkeypatch):
-    import fitz
+    import pymupdf
     from src.core.config import settings
     monkeypatch.setattr(settings, "MAX_DOCUMENT_PAGES", 2)
-    doc = fitz.open()
+    doc = pymupdf.open()
     for _ in range(3):
-        doc.new_page().insert_text(fitz.Point(50, 50), "Patient Name: Retry Case Glucose: 90 mg/dL", fontsize=12)
+        doc.new_page().insert_text(pymupdf.Point(50, 50), "Patient Name: Retry Case Glucose: 90 mg/dL", fontsize=12)
     r = admin.post("/api/v1/documents", files={"file": ("too_long.pdf", io.BytesIO(doc.write()), "application/pdf")})
     doc_id = r.json()["id"]
     assert admin.get(f"/api/v1/documents/{doc_id}").json()["status"] == "FAILED"
@@ -292,11 +292,11 @@ def test_page_images_are_stored_served_and_deleted(admin):
 
 
 def _report_pdf(lines):
-    import fitz
-    doc = fitz.open()
+    import pymupdf
+    doc = pymupdf.open()
     page = doc.new_page()
     for i, line in enumerate(lines):
-        page.insert_text(fitz.Point(50, 50 + 18 * i), line, fontsize=11)
+        page.insert_text(pymupdf.Point(50, 50 + 18 * i), line, fontsize=11)
     return doc.write()
 
 def test_priority_sort_puts_possible_misreads_first(admin):

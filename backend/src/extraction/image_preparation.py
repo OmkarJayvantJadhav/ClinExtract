@@ -1,5 +1,5 @@
 import base64
-import fitz  # PyMuPDF
+import pymupdf  # PyMuPDF
 from typing import List, Dict, Any
 import filetype
 
@@ -15,19 +15,19 @@ def prepare_page_images(file_bytes: bytes, mime_type: str = None) -> List[Dict[s
     pages = []
     
     if mime_type == "application/pdf":
-        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        doc = pymupdf.open(stream=file_bytes, filetype="pdf")
         for page_num in range(len(doc)):
             page = doc[page_num]
             # Zoom to approx 150-200 DPI (72 DPI is default, so 2.0 or 2.5)
             zoom = 2.0
-            mat = fitz.Matrix(zoom, zoom)
+            mat = pymupdf.Matrix(zoom, zoom)
             pix = page.get_pixmap(matrix=mat, alpha=False)
             
             # Constraints: ensure it doesn't get ridiculously large
             max_dimension = 2048
             if pix.width > max_dimension or pix.height > max_dimension:
                 scale = max_dimension / max(pix.width, pix.height)
-                mat = fitz.Matrix(zoom * scale, zoom * scale)
+                mat = pymupdf.Matrix(zoom * scale, zoom * scale)
                 pix = page.get_pixmap(matrix=mat, alpha=False)
                 
             img_bytes = pix.tobytes("jpeg")
@@ -51,10 +51,10 @@ def prepare_page_images(file_bytes: bytes, mime_type: str = None) -> List[Dict[s
     else:
         # Fallback for unsupported types if they reach here, just try PyMuPDF as standard
         try:
-            doc = fitz.open(stream=file_bytes)
+            doc = pymupdf.open(stream=file_bytes)
             for page_num in range(len(doc)):
                 page = doc[page_num]
-                mat = fitz.Matrix(2.0, 2.0)
+                mat = pymupdf.Matrix(2.0, 2.0)
                 pix = page.get_pixmap(matrix=mat, alpha=False)
                 img_bytes = pix.tobytes("jpeg")
                 b64 = base64.b64encode(img_bytes).decode("utf-8")

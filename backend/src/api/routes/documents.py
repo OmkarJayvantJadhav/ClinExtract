@@ -513,10 +513,10 @@ async def get_document_page_image(
         return Response(content=data, media_type=mime, headers=headers)
 
     if mime == "application/pdf":
-        import fitz
+        import pymupdf
         from src.processing.page_images import render_pdf_page
         try:
-            pdf = fitz.open(stream=data, filetype="pdf")
+            pdf = pymupdf.open(stream=data, filetype="pdf")
         except Exception:
             raise HTTPException(status_code=422, detail="Document cannot be rendered")
         try:
@@ -549,9 +549,9 @@ async def get_document_page_count(
     data = await _read_document_bytes(storage, doc)
     kind = filetype.guess(data)
     if kind and kind.mime == "application/pdf":
-        import fitz
+        import pymupdf
         try:
-            with fitz.open(stream=data, filetype="pdf") as pdf:
+            with pymupdf.open(stream=data, filetype="pdf") as pdf:
                 return {"page_count": pdf.page_count}
         except Exception:
             raise HTTPException(status_code=422, detail="Document cannot be rendered")
