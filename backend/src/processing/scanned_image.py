@@ -1,4 +1,5 @@
 import io
+import os
 import cv2
 import numpy as np
 import pytesseract
@@ -7,6 +8,12 @@ from PIL import Image
 
 # Refuse to decode images larger than this many pixels (decompression-bomb protection).
 MAX_IMAGE_PIXELS = 60_000_000
+
+# One OpenMP thread per Tesseract. Several multi-threaded Tesseracts at once (pages OCR'd in
+# parallel, or documents processed by concurrent worker processes) oversubscribe the CPUs badly:
+# two scans processed together took over 2 minutes each instead of ~3 s, and a single page
+# is no slower single-threaded.
+os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 
 def estimate_skew_angle(image: np.ndarray) -> float:
     """

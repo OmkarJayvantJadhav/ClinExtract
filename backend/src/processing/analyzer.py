@@ -86,9 +86,8 @@ def _run_ocr(tasks: list) -> list:
     """
     OCRs (png, page_number) tasks in parallel, returning results in order (a ValueError for
     an undecodable image is returned in place of its result). Tesseract runs as a separate
-    process per call, so threads give real parallelism. Each Tesseract is limited to one
-    OpenMP thread: several multi-threaded Tesseracts at once oversubscribe the CPUs badly
-    (measured: 8 pages on 4 CPUs took 22 s this way and over 9 minutes without the limit).
+    process per call, so threads give real parallelism (each Tesseract uses one OpenMP thread,
+    see scanned_image: 8 pages on 4 CPUs took 22 s this way and over 9 minutes without it).
     """
     def one(task):
         png, page_number = task
@@ -100,7 +99,6 @@ def _run_ocr(tasks: list) -> list:
     workers = min(_ocr_workers(), len(tasks))
     if workers <= 1:
         return [one(t) for t in tasks]
-    os.environ["OMP_THREAD_LIMIT"] = "1"
     with ThreadPoolExecutor(max_workers=workers) as pool:
         return list(pool.map(one, tasks))
 
