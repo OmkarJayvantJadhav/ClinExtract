@@ -111,6 +111,9 @@ async def process_document_async(job_id: str, attempt: int = 1, session_maker: O
 
         job.status = JobStatus.RUNNING
         job.attempt_number = attempt
+        # Set explicitly: taking over a stale RUNNING job changes no other column, and the job
+        # would otherwise still look stale and be sent to another worker while this one runs.
+        job.updated_at = datetime.now(timezone.utc)
         document.status = DocumentStatus.PROCESSING
         storage_key = document.storage_key
         doc_id_str = str(document.id)
@@ -152,21 +155,27 @@ async def process_document_async(job_id: str, attempt: int = 1, session_maker: O
     from src.services.system_settings import get_thresholds, get_review_policy
 
     async with session_maker() as session:
+        # Results are saved only while this job is still running: another run of the same job
+        # may have finished first, the stuck-job sweep may have failed it, or the document may
+        # have been deleted. Locking the job first serializes overlapping runs.
+        job2 = (await session.execute(
+            select(ProcessingJob).where(ProcessingJob.id == job_uuid).with_for_update()
+        )).scalar_one_or_none()
+        doc = await session.get(Document, uuid.UUID(doc_id_str))
+        if not job2 or job2.status != JobStatus.RUNNING or not doc:
+            logger.warning("Job no longer running; results discarded", extra={"event": "job_superseded"})
+            return f"Job {job_id} superseded"
+
         thresholds = await get_thresholds(session)
         review_policy = await get_review_policy(session)
         extraction = await _extract_with_fallback(session, doc_id_str, artifact, file_bytes)
         ValidationEngine.from_thresholds(thresholds, review_policy).validate_extraction(extraction, artifact)
         final_decision = extraction.decision
 
-        job2 = await session.get(ProcessingJob, job_uuid)
-        if job2:
-            job2.status = JobStatus.SUCCEEDED
-            job2.error_details = None
-
-        doc = await session.get(Document, uuid.UUID(doc_id_str))
+        job2.status = JobStatus.SUCCEEDED
+        job2.error_details = None
         new_status = DocumentStatus.AUTO_ACCEPTED if final_decision == "AUTO_ACCEPTED" else DocumentStatus.REVIEW_REQUIRED
-        if doc:
-            doc.status = new_status
+        doc.status = new_status
 
         await log_audit_event(
             session, action="DOCUMENT_PROCESSED", resource_type=RESOURCE_DOCUMENT, resource_id=doc_id_str,
@@ -251,6 +260,8 @@ async def requeue_stuck_jobs(session, enqueue, now: Optional[datetime] = None) -
     progress for JOB_STALE_AFTER_MINUTES (the worker died; longer than the task time limit).
     Those are reset to QUEUED. Each job is touched so the next sweep doesn't send it again
     straight away; a duplicate message is harmless because the task locks the job first.
+    A job whose worker died more than MAX_JOB_RECOVERIES times is marked FAILED with its
+    document instead, so it can be retried or deleted rather than crash workers forever.
     Returns the requeued job ids.
     """
     now = now or datetime.now(timezone.utc)
@@ -269,14 +280,32 @@ async def requeue_stuck_jobs(session, enqueue, now: Optional[datetime] = None) -
     jobs = (await session.execute(stmt)).scalars().all()
     requeued = []
     for job in jobs:
-        if job.status == JobStatus.RUNNING:
-            job.status = JobStatus.QUEUED
         job.updated_at = now
+        if job.status == JobStatus.RUNNING:
+            job.recovery_count = (job.recovery_count or 0) + 1
+            if job.recovery_count > settings.MAX_JOB_RECOVERIES:
+                await _fail_crashing_job(session, job)
+                continue
+            job.status = JobStatus.QUEUED
         requeued.append((str(job.id), job.correlation_id))
     await session.commit()
     for job_id, correlation_id in requeued:
         enqueue(job_id, correlation_id)
     return [job_id for job_id, _ in requeued]
+
+async def _fail_crashing_job(session, job: ProcessingJob) -> None:
+    error = f"Processing stopped the worker {job.recovery_count} times"
+    job.status = JobStatus.FAILED
+    job.error_details = {"error": error, "error_type": "WorkerLost", "step": "recovery_limit"}
+    doc = await session.get(Document, job.document_id)
+    if doc and doc.status == DocumentStatus.PROCESSING:
+        doc.status = DocumentStatus.FAILED
+        await log_audit_event(
+            session, action="DOCUMENT_PROCESSING_FAILED", resource_type=RESOURCE_DOCUMENT,
+            resource_id=str(doc.id), correlation_id=job.correlation_id,
+            after_state={"status": DocumentStatus.FAILED.value, "error": error, "step": "recovery_limit"}
+        )
+    logger.error(error, extra={"event": "job_failed"})
 
 async def _requeue_stuck(session_maker: async_sessionmaker) -> list:
     async with session_maker() as session:

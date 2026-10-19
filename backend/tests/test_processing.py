@@ -233,3 +233,45 @@ def test_rotated_pdf_page_boxes_and_pasted_results(rotation):
     from src.extraction.rule_based import RuleBasedExtractor
     fields = {f.field_name: f.value for f in RuleBasedExtractor().extract({"pages": [page_data]}).fields}
     assert fields["glucose"] == "92" and fields["hemoglobin"] == "14.5" and fields["patient_name"] == "Jane Doe"
+
+
+def _png_header(width, height):
+    """A PNG that only declares its size (no pixel data): enough for a size check."""
+    import struct
+    import zlib
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IEND", b"")
+
+
+@pytest.mark.parametrize("size", [9000, 14000])  # 14000x14000 is past Pillow's own limit
+def test_oversized_image_is_refused_before_decoding(size):
+    from src.processing.analyzer import DocumentAnalyzer, DocumentProcessingError
+    with pytest.raises(DocumentProcessingError, match="too large"):
+        DocumentAnalyzer.process(_png_header(size, size), "image/png", "doc", "job")
+
+
+def test_huge_scanned_pdf_page_is_refused_without_rendering_it():
+    import time
+    import pymupdf
+    from src.processing.analyzer import DocumentAnalyzer, DocumentProcessingError
+    doc = pymupdf.open()
+    doc.new_page(width=5000, height=5000)  # 69 x 69 inches, no text: would be rendered for OCR
+    start = time.time()
+    with pytest.raises(DocumentProcessingError, match="too large to read"):
+        DocumentAnalyzer.process(doc.write(), "application/pdf", "doc", "job")
+    assert time.time() - start < 5
+
+
+def test_viewer_page_image_stays_within_the_pixel_limit(monkeypatch):
+    import io
+    import pymupdf
+    from PIL import Image
+    from src.processing import scanned_image
+    from src.processing.page_images import render_pdf_page
+    monkeypatch.setattr(scanned_image, "MAX_IMAGE_PIXELS", 1_000_000)
+    doc = pymupdf.open()
+    doc.new_page(width=2000, height=1000)  # 150 DPI would be 4167 x 2083 pixels
+    width, height = Image.open(io.BytesIO(render_pdf_page(doc, 1))).size
+    assert width * height <= 1_000_000 and width > height

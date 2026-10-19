@@ -11,6 +11,7 @@ from typing import Any, Literal
 import filetype
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Request, Query
 from fastapi.responses import Response
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -522,7 +523,12 @@ async def get_document_page_image(
         try:
             if page_number < 1 or page_number > pdf.page_count:
                 raise HTTPException(status_code=404, detail="Page not found")
-            png = render_pdf_page(pdf, page_number)
+            # In a worker thread: rendering takes seconds for a large page and would stall
+            # every other request on the event loop
+            try:
+                png = await run_in_threadpool(render_pdf_page, pdf, page_number)
+            except Exception:
+                raise HTTPException(status_code=422, detail="Page cannot be rendered")
         finally:
             pdf.close()
         await storage.store_page_image(doc.storage_key, page_number, png)
