@@ -60,6 +60,21 @@ async def create_user(
     await db.refresh(user)
     return user
 
+async def _keep_an_admin(db: AsyncSession, acting: User, target: User) -> None:
+    """
+    Before an admin is demoted or deactivated: locks the active admins and checks the acting
+    user is still one of them. Two admins demoting each other at the same moment would
+    otherwise both succeed and leave no admin; this way the second is refused. (Admins cannot
+    demote themselves, so the acting admin always remains.)
+    """
+    admins = (await db.execute(
+        select(User.id).where(User.role == UserRole.ADMIN, User.is_active.is_(True)).order_by(User.id).with_for_update()
+    )).scalars().all()
+    if acting.id not in admins:
+        raise HTTPException(status_code=403, detail="You are no longer an administrator")
+    await db.refresh(target)
+
+
 @router.patch("/{user_id}", response_model=UserResponse)
 async def update_user(
     user_id: uuid.UUID,
@@ -72,6 +87,11 @@ async def update_user(
         (body.role is not None and body.role != UserRole.ADMIN) or body.is_active is False
     ):
         raise HTTPException(status_code=400, detail="You cannot demote or deactivate your own account")
+    removes_admin = user.role == UserRole.ADMIN and user.is_active and (
+        (body.role is not None and body.role != UserRole.ADMIN) or body.is_active is False
+    )
+    if removes_admin:
+        await _keep_an_admin(db, current_user, user)
 
     before = {"role": user.role.value, "is_active": user.is_active}
     if body.role is not None and body.role != user.role:

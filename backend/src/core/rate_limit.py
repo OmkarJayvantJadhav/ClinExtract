@@ -1,7 +1,7 @@
 import random
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.login_attempt import LoginAttempt
@@ -26,6 +26,9 @@ class DatabaseRateLimiter:
         """
         now = datetime.now(timezone.utc)
         key = key[:64]
+        # One attempt per key at a time (until the commit below): concurrent requests would
+        # otherwise all count the same attempts and get past the limit together.
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"login:{key}"})
         recent = await db.scalar(
             select(func.count()).select_from(LoginAttempt)
             .where(LoginAttempt.client_key == key, LoginAttempt.attempted_at > now - self.window)

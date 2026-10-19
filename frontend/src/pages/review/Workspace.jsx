@@ -81,6 +81,16 @@ function ReviewWorkspace({ id }) {
   });
 
   const { mutate: claim, isIdle: claimIdle } = claimMutation;
+  // Set when a heartbeat finds the claim gone (it expired and another reviewer took it)
+  const [claimLost, setClaimLost] = useState(false);
+  // An admin can free a document someone else has claimed (e.g. a reviewer who left)
+  const releaseOtherMutation = useMutation({
+    mutationFn: () => fetchApi(`/reviews/${id}/release`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['document', id] });
+      claimMutation.reset(); // claims it for this admin
+    },
+  });
   useEffect(() => {
     if (canReview && doc && CLAIMABLE_STATUSES.includes(doc.status) && claimIdle) {
       claim();
@@ -156,7 +166,7 @@ function ReviewWorkspace({ id }) {
   const selectedField = selected ? { page_num: selected.page_num, bbox: selected.bbox } : null;
 
   const reviewId = claimMutation.data?.id;
-  const isReadOnly = !canReview || (!CLAIMABLE_STATUSES.includes(doc?.status) && !reviewId);
+  const isReadOnly = !canReview || claimLost || (!CLAIMABLE_STATUSES.includes(doc?.status) && !reviewId);
 
   // Only unusable values block approval; abnormal results (e.g. outside reference range)
   // are confirmed explicitly in the approval dialog.
@@ -174,7 +184,9 @@ function ReviewWorkspace({ id }) {
   useEffect(() => {
     if (!reviewId) return undefined;
     const timer = setInterval(() => {
-      fetchApi(`/reviews/${id}/heartbeat`, { method: 'POST' }).catch(() => {});
+      fetchApi(`/reviews/${id}/heartbeat`, { method: 'POST' }).catch((err) => {
+        if (err.status === 404) setClaimLost(true);
+      });
     }, HEARTBEAT_MS);
     return () => clearInterval(timer);
   }, [reviewId, id]);
@@ -224,7 +236,15 @@ function ReviewWorkspace({ id }) {
             ? 'This document is currently being reviewed by another reviewer.'
             : `Unable to start the review: ${claimMutation.error?.message}`}
         </div>
-        <Button variant="outline" asChild><Link to="/review">Back to review queue</Link></Button>
+        <div className="flex gap-2">
+          <Button variant="outline" asChild><Link to="/review">Back to review queue</Link></Button>
+          {conflict && hasRole('ADMIN') && (
+            <Button variant="outline" onClick={() => releaseOtherMutation.mutate()} disabled={releaseOtherMutation.isPending}>
+              Release their claim and review it
+            </Button>
+          )}
+        </div>
+        {releaseOtherMutation.isError && <p className="text-sm text-destructive">{releaseOtherMutation.error.message}</p>}
       </div>
     );
   }
@@ -381,7 +401,12 @@ function ReviewWorkspace({ id }) {
           {formatErrorDetail(completeMutation.error || releaseMutation.error)}
         </div>
       )}
-      {isReadOnly && (
+      {claimLost && (
+        <div className="px-4 py-2 text-sm bg-destructive/10 text-destructive border-b border-destructive/20">
+          Your claim on this document expired and another reviewer has taken it over. Your changes here can no longer be saved.
+        </div>
+      )}
+      {isReadOnly && !claimLost && (
         <div className="px-4 py-2 text-sm bg-muted text-muted-foreground border-b">
           Read-only: this document is not awaiting review{canReview ? '' : ' or you do not have reviewer permissions'}.
         </div>
