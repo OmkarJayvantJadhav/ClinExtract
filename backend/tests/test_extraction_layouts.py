@@ -137,3 +137,46 @@ def test_sex_not_given_does_not_block(value):
 def test_confidence_is_always_on_a_0_to_100_scale():
     assert calculate_field_confidence(1.0, "VALID") == 0.01
     assert calculate_field_confidence(95.0, "VALID") == 0.95
+
+
+@pytest.mark.parametrize("line", [
+    "Patient Name: Aarav Mehta   Referring Physician: Dr. Rao",
+    "Patient Name: Aarav Mehta Ref. Doctor: Dr. Rao",
+    "Patient Name: Aarav Mehta Consultant Doctor: Dr. Rao",
+    "Patient Name: Aarav Mehta Ward: 4B",
+    "Patient Name: Aarav Mehta Lab No: 5531",
+])
+def test_name_stops_at_the_next_label_on_its_line(line):
+    _, fields = _run(HEADER.replace("Patient Name: Aarav Mehta", line) + RESULTS)
+    assert fields["patient_name"].value == "Aarav Mehta"
+
+
+def test_a_surname_that_is_also_a_label_word_is_kept():
+    _, fields = _run(HEADER.replace("Aarav Mehta", "Mary Ward") + RESULTS)
+    assert fields["patient_name"].value == "Mary Ward"
+
+
+@pytest.mark.parametrize("doctor_line", ["Doctor's Name: Dr. Anil Rao", "Name: Dr. Anil Rao"])
+def test_a_doctors_name_above_the_patient_is_not_the_patient(doctor_line):
+    _, fields = _run(doctor_line + "\n" + HEADER + RESULTS)
+    assert fields["patient_name"].value == "Aarav Mehta"
+
+
+@pytest.mark.parametrize("before", [
+    "HbA1c 7.1 % H 4.0 - 5.6\nAverage Blood Glucose 157 mg/dL\n",
+    "Mean Blood Glucose 157 mg/dL 90 - 120\n",
+    "Post Prandial Glucose 182 mg/dL 70 - 140\n",
+    "Urine Glucose 250 mg/dL\n",
+    "URINALYSIS\nGlucose 250 mg/dL Negative\nBlood Negative\nBIOCHEMISTRY\n",
+])
+def test_glucose_is_the_blood_result_not_another_glucose_row(before):
+    _, fields = _run(HEADER + before + RESULTS)
+    assert fields["glucose"].value == "90"
+
+
+def test_a_range_printed_for_each_sex_is_not_used_as_the_patients():
+    text = (HEADER.replace("Sex: Male", "Sex: Female") + RESULTS).replace(
+        "Hemoglobin 14.5 g/dL 13.5 - 17.5", "Hemoglobin 13.0 g/dL 13.5 - 17.5 (M); 12.0 - 15.5 (F)")
+    _, fields = _run(text)
+    assert fields["hemoglobin"].reference_range is None
+    assert fields["hemoglobin"].validation_state == "VALID"  # normal for a woman

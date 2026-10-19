@@ -91,3 +91,29 @@ def test_confirmed_page_check_warning_stays_on_the_record(admin):
     audit = admin.get("/api/v1/audit", params={"document_id": doc_id}).json()["items"]
     approved = next(e for e in audit if e["action"] == "DOCUMENT_HUMAN_APPROVED")
     assert {"field_name": "glucose", "state": "FLAG_MISMATCH"} in approved["changes"]["after"]["confirmed_warnings"]
+
+
+def test_a_correction_does_not_re_read_the_dates_it_did_not_touch(admin):
+    # 25/05/1985 shows the report prints dates day first, so 03/04/2026 is 3 April
+    lines = ["Patient Name: Ravi Kumar", "DOB: 25/05/1985", "Sex: Male", "Specimen Type: Blood",
+             "Collection Date: 03/04/2026", "Received Date: 04/04/2026", "Glucose: 92 mg/dL"] + RESULTS
+    doc_id, review_id, fields = _claimed(admin, lines)
+    assert fields["collection_date"]["normalized_value"] == "2026-04-03"
+    r = _approve(admin, doc_id, review_id, [
+        {"extracted_field_id": fields["patient_id"]["id"], "new_value": "P-" + uuid.uuid4().hex[:6], "reason": "Label"},
+        {"extracted_field_id": fields["date_of_birth"]["id"], "new_value": "1985-05-25", "reason": "ISO format"},
+    ])
+    assert r.status_code == 200, r.text
+    assert _fields(admin, doc_id)["collection_date"]["normalized_value"] == "2026-04-03"
+
+
+@pytest.mark.parametrize("typed", ["14.2.5", "92abc7", "9" * 400], ids=["two-points", "letters", "overflow"])
+def test_a_mistyped_result_must_be_fixed_before_approval(admin, typed):
+    doc_id, review_id, fields = _claimed(admin, HEADER + ["Glucose: 92 mg/dL"] + RESULTS)
+    r = _approve(admin, doc_id, review_id, [
+        {"extracted_field_id": fields["patient_id"]["id"], "new_value": "P-" + uuid.uuid4().hex[:6], "reason": "Label"},
+        {"extracted_field_id": fields["glucose"]["id"], "new_value": typed, "reason": "Typo"},
+    ], confirm_warnings=True)
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["code"] == "UNRESOLVED_VALIDATION_ISSUES"
+    assert [f["field_name"] for f in r.json()["detail"]["fields"]] == ["glucose"]
