@@ -121,7 +121,7 @@ export function EditableField({ field, currentValue, isCorrected, isActive, isEd
 
       {isCorrected && !isEditing && (
         <div className="mt-1.5 flex items-center justify-between text-[11px] bg-muted/50 p-1.5 rounded-sm">
-          <span className="text-muted-foreground">Original AI extraction: <span className="line-through font-mono ml-1">{field.value ?? '(empty)'}</span></span>
+          <span className="text-muted-foreground">Originally extracted: <span className="line-through font-mono ml-1">{field.value ?? '(empty)'}</span></span>
           <Button variant="ghost" size="sm" className="h-5 px-1.5 text-xs text-muted-foreground hover:text-destructive" onClick={handleRevert}>
             <RotateCcw className="h-3 w-3 mr-1" /> Revert
           </Button>

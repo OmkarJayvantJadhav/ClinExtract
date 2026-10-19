@@ -86,7 +86,7 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{(stats.review.correction_rate * 100).toFixed(1)}%</div>
-            <p className="text-xs text-muted-foreground">Fields modified by users</p>
+            <p className="text-xs text-muted-foreground">Reviewed documents corrected</p>
           </CardContent>
         </Card>
         <Card>
