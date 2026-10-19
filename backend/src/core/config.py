@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     MAX_DOCUMENT_PAGES: int = 50
     # Pages OCR'd at the same time within one document; 0 = number of CPUs (at most 4)
     OCR_WORKERS: int = 0
+    # Tesseract is stopped after this long on one page and the page counts as unreadable,
+    # so a pathological image fails its document instead of tying up a worker.
+    OCR_PAGE_TIMEOUT_SECONDS: int = 60
 
     # --- Compliance ---
     # Fernet key used to encrypt stored documents and OCR artifacts at rest.

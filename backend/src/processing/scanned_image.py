@@ -6,6 +6,8 @@ import pytesseract
 from typing import Optional, Tuple
 from PIL import Image
 
+from src.core.config import settings
+
 # Refuse to decode images larger than this many pixels (decompression-bomb protection).
 MAX_IMAGE_PIXELS = 60_000_000
 
@@ -113,7 +115,14 @@ def process_scanned_page(image_bytes: bytes, page_number: int) -> dict:
 
     # Run Tesseract OCR getting data dictionary
     # output includes: level, page_num, block_num, par_num, line_num, word_num, left, top, width, height, conf, text
-    ocr_data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
+    try:
+        ocr_data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT,
+                                             timeout=settings.OCR_PAGE_TIMEOUT_SECONDS)
+    except pytesseract.TesseractError:
+        raise
+    except RuntimeError as e:
+        # pytesseract stops Tesseract and raises a plain RuntimeError on timeout
+        raise ValueError(f"OCR of page {page_number} took longer than {settings.OCR_PAGE_TIMEOUT_SECONDS} s") from e
 
     words_data = []
     # (row key in the deskewed frame, x, word) so words can be put in reading order below
