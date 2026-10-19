@@ -62,6 +62,9 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
+    # A fixed node name: RabbitMQ keeps its data per hostname, and the default (the container
+    # id) changes when the container is recreated, losing queued jobs
+    hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}

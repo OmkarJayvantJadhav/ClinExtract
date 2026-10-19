@@ -57,6 +57,12 @@ def clear_auth_cookies(response: Response) -> None:
     response.delete_cookie("access_token", httponly=True, secure=settings.cookie_secure, samesite="strict")
     response.delete_cookie("clinextract_csrf", secure=settings.cookie_secure, samesite="strict")
 
+def _refused() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Incorrect username or password. After repeated failures an account is locked for a while.",
+    )
+
 async def _record_wrong_password(db: AsyncSession, user: User, now: datetime, ip: str, action: str) -> bool:
     """
     Counts a wrong password (at login or when changing it) towards the lockout, audits it and
@@ -91,23 +97,32 @@ async def login(
     user = (await db.execute(stmt)).scalar_one_or_none()
     now = datetime.now(timezone.utc)
 
+    # Every refusal below looks the same (status, message, a password check's work), so the
+    # answer never tells which usernames exist or whether a guess for a locked or deactivated
+    # account was right. Each one is audited.
     if not user:
         burn_password_check(login_data.password)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+        await log_audit_event(
+            db, action="USER_LOGIN_FAILED", resource_type=RESOURCE_USER, resource_id="unknown",
+            after_state={"ip": ip, "reason": "unknown username", "username": login_data.username[:64]},
+        )
+        await db.commit()
+        raise _refused()
 
     demo = is_demo_account(user)
-    if user.locked_until and user.locked_until > now and not demo:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Account temporarily locked after repeated failed logins. Try again later or contact an administrator.",
+    locked = bool(user.locked_until and user.locked_until > now and not demo)
+    if locked or not user.is_active:
+        burn_password_check(login_data.password)
+        await log_audit_event(
+            db, action="USER_LOGIN_BLOCKED", resource_type=RESOURCE_USER, resource_id=str(user.id),
+            after_state={"ip": ip, "reason": "locked" if locked else "inactive"},
         )
+        await db.commit()
+        raise _refused()
 
     if not verify_password(login_data.password, user.password_hash):
         await _record_wrong_password(db, user, now, ip, "USER_LOGIN_FAILED")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
-
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive user")
+        raise _refused()
 
     user.failed_login_count = 0
     user.locked_until = None

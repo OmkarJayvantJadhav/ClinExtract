@@ -164,6 +164,10 @@ async def process_document_async(job_id: str, attempt: int = 1, session_maker: O
         doc = await session.get(Document, uuid.UUID(doc_id_str))
         if not job2 or job2.status != JobStatus.RUNNING or not doc:
             logger.warning("Job no longer running; results discarded", extra={"event": "job_superseded"})
+            if not doc:
+                # Deleted while being processed: the OCR output and page images written above
+                # would otherwise stay on disk with no document
+                await storage.delete_document_files(storage_key)
             return f"Job {job_id} superseded"
 
         thresholds = await get_thresholds(session)

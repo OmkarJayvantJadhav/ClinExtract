@@ -94,6 +94,15 @@ export function Upload() {
             onDragLeave={() => setIsDragging(false)}
             onDrop={(e) => { e.preventDefault(); setIsDragging(false); addFiles(e.dataTransfer.files); }}
             onClick={() => inputRef.current?.click()}
+            role="button"
+            tabIndex={0}
+            aria-label="Choose files to upload"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                inputRef.current?.click();
+              }
+            }}
           >
             <UploadCloud className="mx-auto h-10 w-10 text-muted-foreground mb-3" />
             <h3 className="text-lg font-medium mb-1">Click or drag files here</h3>

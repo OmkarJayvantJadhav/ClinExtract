@@ -23,6 +23,7 @@ function ReadOnlyRow({ label, value, help }) {
 }
 
 function ChangePasswordCard({ minLength }) {
+  const { refreshUser } = useAuth();
   const [form, setForm] = useState({ current_password: '', new_password: '', confirm: '' });
   const [done, setDone] = useState(false);
   const mutation = useMutation({
@@ -33,6 +34,7 @@ function ChangePasswordCard({ minLength }) {
     onSuccess: () => {
       setDone(true);
       setForm({ current_password: '', new_password: '', confirm: '' });
+      refreshUser(); // "Password last changed"
     },
   });
   const mismatch = form.confirm && form.new_password !== form.confirm;
@@ -237,9 +239,11 @@ export function Settings() {
         <TabsContent value="confidence" className="mt-6 grid gap-6">
           {settings
             ? <>
-                <ThresholdsCard key={JSON.stringify(settings.confidence_thresholds)} thresholds={settings.confidence_thresholds} editable={hasRole('ADMIN')} />
+                {/* Stable keys: re-keying on the saved values remounted the cards after each save,
+                    and their "saved" confirmation vanished at once */}
+                <ThresholdsCard key="thresholds" thresholds={settings.confidence_thresholds} editable={hasRole('ADMIN')} />
                 {settings.review_policy && (
-                  <ReviewPolicyCard key={JSON.stringify(settings.review_policy)} policy={settings.review_policy} editable={hasRole('ADMIN')} />
+                  <ReviewPolicyCard key="review-policy" policy={settings.review_policy} editable={hasRole('ADMIN')} />
                 )}
               </>
             : <p className="text-sm text-muted-foreground">Loading…</p>}

@@ -109,6 +109,15 @@ class Settings(BaseSettings):
                 raise ValueError("JWT_SECRET must be a strong random value (>= 32 chars) when APP_ENV=production")
             if not self.DOCUMENT_ENCRYPTION_KEY:
                 raise ValueError("DOCUMENT_ENCRYPTION_KEY must be set when APP_ENV=production")
+        if self.DOCUMENT_ENCRYPTION_KEY:
+            # Checked at startup: a malformed key (e.g. hex) otherwise passes and every upload,
+            # download and worker task fails later
+            from cryptography.fernet import Fernet
+            try:
+                Fernet(self.DOCUMENT_ENCRYPTION_KEY.encode())
+            except Exception:
+                raise ValueError("DOCUMENT_ENCRYPTION_KEY is not a valid Fernet key (32 url-safe base64-encoded bytes); "
+                                 'generate one with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"')
         return self
 
     @property

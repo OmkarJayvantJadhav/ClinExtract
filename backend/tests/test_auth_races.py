@@ -73,7 +73,7 @@ async def test_wrong_current_password_counts_towards_the_lockout():
     # The session used for guessing is ended, and the right password no longer helps
     assert (await user.get("/api/v1/auth/me")).status_code == 401
     fresh = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
-    assert (await fresh.post("/api/v1/auth/login", json={"username": name, "password": STRONG})).status_code == 429
+    assert (await fresh.post("/api/v1/auth/login", json={"username": name, "password": STRONG})).status_code == 401
     actions = [e["action"] for e in (await root.get("/api/v1/audit", params={"size": 100})).json()["items"]]
     assert "USER_PASSWORD_CHANGE_FAILED" in actions and "USER_ACCOUNT_LOCKED" in actions
 

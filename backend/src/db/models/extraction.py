@@ -7,7 +7,7 @@ from src.db.base import BaseModel
 class Extraction(BaseModel):
     __tablename__ = "extractions"
 
-    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("documents.id"))
+    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("documents.id"), index=True)
     extractor_type: Mapped[str] = mapped_column(String, server_default="rule_based")
     model_version: Mapped[str] = mapped_column(String, nullable=True)
     provider: Mapped[str] = mapped_column(String)

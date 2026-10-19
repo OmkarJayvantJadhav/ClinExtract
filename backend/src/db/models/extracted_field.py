@@ -7,7 +7,7 @@ from src.db.base import BaseModel
 class ExtractedField(BaseModel):
     __tablename__ = "extracted_fields"
 
-    extraction_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("extractions.id"))
+    extraction_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("extractions.id"), index=True)
     field_name: Mapped[str] = mapped_column(String)
     value: Mapped[str] = mapped_column(String, nullable=True)
     unit: Mapped[str] = mapped_column(String, nullable=True)
