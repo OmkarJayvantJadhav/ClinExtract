@@ -5,22 +5,35 @@ import { Button } from '@/components/ui/button';
 import { Check, X, RotateCcw } from 'lucide-react';
 import { ValidationBadge } from '@/components/common/StatusPrimitives';
 
-// Mounted only while editing, so it always starts from the field's current value
-function FieldEditor({ initialValue, onSave, onCancel }) {
+// Mounted only while editing, so it always starts from the field's current value (and unit)
+function FieldEditor({ initialValue, initialUnit, withUnit, onSave, onCancel }) {
   const [tempValue, setTempValue] = useState(initialValue);
+  const [tempUnit, setTempUnit] = useState(initialUnit ?? '');
+  const keys = (e) => {
+    if (e.key === 'Enter') onSave(tempValue, tempUnit);
+    if (e.key === 'Escape') onCancel();
+  };
   return (
     <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
       <Input
         autoFocus
+        aria-label="Value"
         className="h-8 text-sm font-mono border-primary shadow-xs"
         value={tempValue ?? ''}
         onChange={(e) => setTempValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') onSave(tempValue);
-          if (e.key === 'Escape') onCancel();
-        }}
+        onKeyDown={keys}
       />
-      <Button size="icon" variant="ghost" className="h-8 w-8 text-success hover:text-success hover:bg-success/10" onClick={() => onSave(tempValue)}>
+      {withUnit && (
+        <Input
+          aria-label="Unit"
+          placeholder="unit"
+          className="h-8 w-24 text-sm font-mono"
+          value={tempUnit}
+          onChange={(e) => setTempUnit(e.target.value)}
+          onKeyDown={keys}
+        />
+      )}
+      <Button size="icon" variant="ghost" className="h-8 w-8 text-success hover:text-success hover:bg-success/10" onClick={() => onSave(tempValue, tempUnit)}>
         <Check className="h-4 w-4" />
       </Button>
       <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" onClick={onCancel}>
@@ -30,7 +43,7 @@ function FieldEditor({ initialValue, onSave, onCancel }) {
   );
 }
 
-export function EditableField({ field, currentValue, isCorrected, isActive, isEditing, onEditingChange, onSelect, onEdit }) {
+export function EditableField({ field, currentValue, currentUnit, isCorrected, isActive, isEditing, onEditingChange, onSelect, onEdit }) {
   const ref = useRef(null);
 
   // Keep the field selected from the keyboard in view
@@ -38,10 +51,12 @@ export function EditableField({ field, currentValue, isCorrected, isActive, isEd
     if (isActive) ref.current?.scrollIntoView?.({ block: 'nearest' });
   }, [isActive]);
 
-  const handleSave = (tempValue) => {
-    const original = field.value ?? '';
-    if ((tempValue ?? '') !== original) {
-      onEdit(tempValue);
+  const handleSave = (tempValue, tempUnit) => {
+    const valueChanged = (tempValue ?? '') !== (field.value ?? '');
+    const unit = (tempUnit ?? '').trim();
+    const unitChanged = field.isNumeric && unit !== '' && unit !== (field.unit ?? '');
+    if (valueChanged || unitChanged) {
+      onEdit(tempValue, unitChanged ? unit : undefined);
     } else {
       // Reverted to original
       onEdit(undefined);
@@ -90,7 +105,7 @@ export function EditableField({ field, currentValue, isCorrected, isActive, isEd
 
       <div className="mt-1">
         {isEditing ? (
-          <FieldEditor initialValue={currentValue} onSave={handleSave} onCancel={handleCancel} />
+          <FieldEditor initialValue={currentValue} initialUnit={currentUnit} withUnit={field.isNumeric} onSave={handleSave} onCancel={handleCancel} />
         ) : (
           <div 
             className="flex items-center justify-between min-h-[28px]"
@@ -104,7 +119,7 @@ export function EditableField({ field, currentValue, isCorrected, isActive, isEd
               <span className={cn("text-sm font-mono", isCorrected ? "font-bold text-primary" : "text-foreground")}>
                 {currentValue === null || currentValue === undefined || currentValue === '' ? <span className="italic text-muted-foreground">— not extracted —</span> : currentValue}
               </span>
-              {field.unit && <span className="text-xs text-muted-foreground font-mono">{field.unit}</span>}
+              {currentUnit && <span className={cn("text-xs font-mono", currentUnit !== field.unit ? "font-bold text-primary" : "text-muted-foreground")}>{currentUnit}</span>}
               {field.abnormalFlag && <span className="text-xs font-semibold text-warning-foreground">{field.abnormalFlag}</span>}
               {field.referenceRange && <span className="text-xs text-muted-foreground">(ref {field.referenceRange})</span>}
             </div>
@@ -121,7 +136,7 @@ export function EditableField({ field, currentValue, isCorrected, isActive, isEd
 
       {isCorrected && !isEditing && (
         <div className="mt-1.5 flex items-center justify-between text-[11px] bg-muted/50 p-1.5 rounded-sm">
-          <span className="text-muted-foreground">Originally extracted: <span className="line-through font-mono ml-1">{field.value ?? '(empty)'}</span></span>
+          <span className="text-muted-foreground">Originally extracted: <span className="line-through font-mono ml-1">{`${field.value ?? '(empty)'} ${currentUnit !== field.unit ? field.unit || '(no unit)' : ''}`.trim()}</span></span>
           <Button variant="ghost" size="sm" className="h-5 px-1.5 text-xs text-muted-foreground hover:text-destructive" onClick={handleRevert}>
             <RotateCcw className="h-3 w-3 mr-1" /> Revert
           </Button>

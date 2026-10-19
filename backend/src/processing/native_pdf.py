@@ -1,5 +1,7 @@
 import pymupdf
 
+from src.processing.scanned_image import _reading_order
+
 def process_native_page(page: pymupdf.Page) -> dict:
     """
     Extracts text and normalized bounding boxes from a native PDF page.
@@ -7,32 +9,29 @@ def process_native_page(page: pymupdf.Page) -> dict:
     width = page.rect.width
     height = page.rect.height
     
-    words_data = []
-    
-    # get_text("words") returns: (x0, y0, x1, y1, "word", block_no, line_no, word_no)
-    words = page.get_text("words")
-    for w in words:
-        x0, y0, x1, y1, text, block_no, line_no, word_no = w
-        
-        # Normalize to 0.0 - 1.0
-        # Prevent division by zero just in case (though page dimensions shouldn't be 0)
-        norm_x0 = x0 / width if width else 0.0
-        norm_y0 = y0 / height if height else 0.0
-        norm_w = (x1 - x0) / width if width else 0.0
-        norm_h = (y1 - y0) / height if height else 0.0
-        
-        # Clamp to 0-1
-        norm_x0 = max(0.0, min(1.0, norm_x0))
-        norm_y0 = max(0.0, min(1.0, norm_y0))
-        norm_w = max(0.0, min(1.0, norm_w))
-        norm_h = max(0.0, min(1.0, norm_h))
-        
-        words_data.append({
+    # get_text("words") returns: (x0, y0, x1, y1, "word", block_no, line_no, word_no), positioned
+    # on the unrotated page; a page with /Rotate is displayed (and rendered for review) rotated.
+    # Lines are found on the unrotated page, where the text runs left to right.
+    to_display = page.rotation_matrix
+    positioned = []
+    for w in page.get_text("words"):
+        x0, y0, x1, y1, text = w[:5]
+        rect = pymupdf.Rect(x0, y0, x1, y1) * to_display
+        # Normalize to 0.0 - 1.0 of the displayed page, clamped
+        norm = [
+            rect.x0 / width if width else 0.0,
+            rect.y0 / height if height else 0.0,
+            rect.width / width if width else 0.0,
+            rect.height / height if height else 0.0,
+        ]
+        word = {
             "text": text,
             "confidence": 100.0,  # Native text is considered 100% confident
-            "bbox": [norm_x0, norm_y0, norm_w, norm_h]
-        })
-        
+            "bbox": [max(0.0, min(1.0, v)) for v in norm],
+        }
+        positioned.append(((y0 + y1) / 2, y1 - y0, x0, word))
+    words_data = [word for _, _, _, word in _reading_order(positioned)]
+
     full_text = page.get_text("text").strip()
     
     return {

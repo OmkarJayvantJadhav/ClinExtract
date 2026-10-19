@@ -202,3 +202,34 @@ def test_ocr_timeout_fails_the_document_instead_of_hanging(monkeypatch, fake_sca
     with pytest.raises(DocumentProcessingError, match="OCR of page 1 took longer than"):
         DocumentAnalyzer.process(fake_scanned_png_bytes, "image/png", "doc", "job")
     assert time.time() - start < 10
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_rotated_pdf_page_boxes_and_pasted_results(rotation):
+    import pymupdf
+    from src.processing.analyzer import DocumentAnalyzer
+    pasted = pymupdf.open()
+    p = pasted.new_page(width=400, height=200)
+    p.insert_text((20, 100), "Hemoglobin 14.5 g/dL", fontsize=24)
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((50, 100), "Patient Name: Jane Doe Glucose 92 mg/dL", fontsize=14)
+    page.insert_image(pymupdf.Rect(50, 300, 450, 500), stream=p.get_pixmap(matrix=pymupdf.Matrix(3, 3)).tobytes("png"))
+    page.set_rotation(rotation)
+
+    page_data = DocumentAnalyzer.process(doc.write(), "application/pdf", "doc", "job")["pages"][0]
+    # The text in the pasted image is read on rotated pages too
+    assert page_data["source_type"] == "MIXED"
+    assert "Hemoglobin" in [w["text"] for w in page_data["words"]]
+    # Boxes are where the word is shown: (50, 85) on the page, turned 90 degrees clockwise
+    x, y, w, h = next(w["bbox"] for w in page_data["words"] if w["text"] == "Glucose")
+    if rotation == 0:
+        assert x < 0.5 and y < 0.2
+    elif rotation == 90:
+        assert x > 0.8 and y < 0.5 and h > w  # the word now runs down the page
+    elif rotation == 180:
+        assert x > 0.5 and y > 0.8
+    # Values are still read from their label's line, including the pasted results
+    from src.extraction.rule_based import RuleBasedExtractor
+    fields = {f.field_name: f.value for f in RuleBasedExtractor().extract({"pages": [page_data]}).fields}
+    assert fields["glucose"] == "92" and fields["hemoglobin"] == "14.5" and fields["patient_name"] == "Jane Doe"

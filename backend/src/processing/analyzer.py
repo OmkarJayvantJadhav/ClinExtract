@@ -23,8 +23,11 @@ class DocumentProcessingError(ValueError):
     """The document itself cannot be processed (corrupt, encrypted, too large). Retrying will not help."""
 
 def _image_regions(page: pymupdf.Page) -> list:
-    """Page areas covered by embedded images large enough to hold text worth reading."""
-    page_rect = page.rect
+    """
+    Areas of the unrotated page (where its text runs left to right) covered by embedded images
+    large enough to hold text worth reading.
+    """
+    page_rect = page.rect * page.derotation_matrix
     page_area = page_rect.width * page_rect.height
     regions = []
     for info in page.get_image_info():
@@ -39,18 +42,28 @@ def _image_regions(page: pymupdf.Page) -> list:
     return regions
 
 def _render_image_regions(page: pymupdf.Page) -> list:
-    """(clip rect, PNG) for each large image on a native-text page, rendered for OCR."""
-    zoom = OCR_RENDER_DPI / 72.0
-    return [
-        (clip, page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip, alpha=False).tobytes("png"))
-        for clip in _image_regions(page)
-    ]
-
-def _merge_region_words(page_data: dict, page_w: float, page_h: float, regions: list) -> None:
     """
-    Appends the OCR'd words of a native-text page's large images (`regions`: (clip rect, OCR
-    result)) with bounding boxes in the page's frame. Words that sit on top of native text
-    (e.g. a text layer over the image) are skipped so nothing is read twice.
+    (clip rect, PNG) for each large image on a native-text page, rendered for OCR upright like
+    the page's text, i.e. without the page's /Rotate (clips are on the unrotated page).
+    """
+    zoom = OCR_RENDER_DPI / 72.0
+    rotation = page.rotation
+    page.set_rotation(0)  # in memory only; the document is never saved
+    try:
+        return [
+            (clip, page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip, alpha=False).tobytes("png"))
+            for clip in _image_regions(page)
+        ]
+    finally:
+        page.set_rotation(rotation)
+
+def _merge_region_words(page_data: dict, page_w: float, page_h: float, regions: list,
+                        to_display: pymupdf.Matrix = pymupdf.Identity) -> None:
+    """
+    Appends the OCR'd words of a native-text page's large images (`regions`: (clip rect on the
+    unrotated page, OCR result)) with bounding boxes in the displayed page's frame (`to_display`:
+    the page's rotation matrix; `page_w`/`page_h`: displayed size). Words that sit on top of
+    native text (e.g. a text layer over the image) are skipped so nothing is read twice.
     """
     native_boxes = [w["bbox"] for w in page_data["words"]]
 
@@ -59,18 +72,21 @@ def _merge_region_words(page_data: dict, page_w: float, page_h: float, regions: 
 
     added = []
     deskewed = False
+    # The images' lines are read after the page's own text lines
+    next_line = max((w.get("line", -1) for w in page_data["words"]), default=-1) + 1
     for clip, ocr in regions:
         deskewed = deskewed or ocr.get("deskew_applied", False)
         for word in ocr["words"]:
-            # Region-relative fractions -> page-relative fractions
+            # Region-relative fractions -> unrotated page points -> displayed page fractions
             rx, ry, rw, rh = word["bbox"]
-            x = (clip.x0 + rx * clip.width) / page_w
-            y = (clip.y0 + ry * clip.height) / page_h
-            w = rw * clip.width / page_w
-            h = rh * clip.height / page_h
+            box = pymupdf.Rect(clip.x0 + rx * clip.width, clip.y0 + ry * clip.height,
+                               clip.x0 + (rx + rw) * clip.width, clip.y0 + (ry + rh) * clip.height) * to_display
+            x, y, w, h = box.x0 / page_w, box.y0 / page_h, box.width / page_w, box.height / page_h
             if overlaps_native(x + w / 2, y + h / 2):
                 continue
-            added.append({"text": word["text"], "confidence": word["confidence"], "bbox": [x, y, w, h]})
+            added.append({"text": word["text"], "confidence": word["confidence"], "bbox": [x, y, w, h],
+                          "line": next_line + word.get("line", 0)})
+        next_line += max((word.get("line", 0) for word in ocr["words"]), default=-1) + 1
 
     if added:
         page_data["words"].extend(added)
@@ -132,7 +148,7 @@ class DocumentAnalyzer:
                     number = page.number + 1
                     if len(page.get_text("text").strip()) > MIN_NATIVE_TEXT_CHARS:
                         regions = _render_image_regions(page)
-                        plans.append(("native", process_native_page(page), page.rect, [
+                        plans.append(("native", process_native_page(page), (page.rect, page.rotation_matrix), [
                             (clip, len(tasks) + i) for i, (clip, _) in enumerate(regions)
                         ]))
                         tasks += [(png, number) for _, png in regions]
@@ -148,7 +164,7 @@ class DocumentAnalyzer:
             results = _run_ocr(tasks)
 
             # 3. Assemble the pages in order
-            for kind, page_data, rect, ref in plans:
+            for kind, page_data, frame, ref in plans:
                 if kind == "scanned":
                     if isinstance(results[ref], ValueError):
                         raise DocumentProcessingError(str(results[ref])) from results[ref]
@@ -161,7 +177,8 @@ class DocumentAnalyzer:
                             logger.warning(f"Skipping OCR of an image region on page {page_data['page_number']}: {results[index]}")
                         else:
                             regions.append((clip, results[index]))
-                    _merge_region_words(page_data, rect.width, rect.height, regions)
+                    rect, to_display = frame
+                    _merge_region_words(page_data, rect.width, rect.height, regions, to_display)
                 pages_data.append(page_data)
 
         elif mime_type in ["image/png", "image/jpeg"]:

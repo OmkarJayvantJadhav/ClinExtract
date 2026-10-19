@@ -10,6 +10,9 @@ class FieldCorrection(BaseModel):
     review_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("reviews.id"))
     previous_value: Mapped[str] = mapped_column(String, nullable=True)
     new_value: Mapped[str] = mapped_column(String, nullable=True)
+    # Set when the reviewer corrected the unit (None: unit unchanged)
+    previous_unit: Mapped[str] = mapped_column(String, nullable=True)
+    new_unit: Mapped[str] = mapped_column(String, nullable=True)
     reason: Mapped[str] = mapped_column(String, nullable=True)
 
     extracted_field = relationship("ExtractedField", back_populates="field_corrections")

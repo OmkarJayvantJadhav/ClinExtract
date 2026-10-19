@@ -182,10 +182,10 @@ def _export_field(f: ExtractedField) -> dict:
     meta = f.validation_metadata or {}
     return {
         "value": f.normalized_value if f.normalized_value not in (None, "") else f.current_value,
-        "unit": meta.get("canonical_unit") or f.unit,
+        "unit": meta.get("canonical_unit") or f.current_unit,
         "flag": _final_flag(f),
         "printed_value": f.current_value,
-        "printed_unit": f.unit,
+        "printed_unit": f.current_unit,
         "printed_flag": f.abnormal_flag,
         "reference_range": f.reference_range,
         "validation_state": f.validation_state,

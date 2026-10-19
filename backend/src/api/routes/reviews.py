@@ -18,6 +18,11 @@ from src.services.audit import log_audit_event, RESOURCE_DOCUMENT, RESOURCE_EXTR
 from src.validation.engine import ValidationEngine, BLOCKING_STATES, VALIDATED_FIELDS
 from src.services.system_settings import get_thresholds
 
+# Set by checks against the page text when the document was processed, which approval does not
+# re-run; kept when the reviewer leaves the field unchanged and approval finds no other problem.
+PAGE_CHECK_STATES = {"SOURCE_MISMATCH", "FLAG_MISMATCH", "POSSIBLE_MISREAD"}
+KEPT_IF_UNCHANGED_FROM = {"VALID", "OUTSIDE_REFERENCE_RANGE"}
+
 router = APIRouter(prefix="/reviews", tags=["reviews"])
 
 REVIEW_ROLES = [UserRole.ADMIN, UserRole.REVIEWER]
@@ -156,18 +161,24 @@ async def complete_review(
     fields_by_id = {f.id: f for f in extraction.extracted_fields}
     # Keyed by field id (not name) so duplicate field names cannot overwrite each other
     current_values = {f.id: f.current_value for f in extraction.extracted_fields}
+    current_units = {f.id: f.current_unit for f in extraction.extracted_fields}
 
     pending_corrections = []
     for corr in request.corrections:
         field = fields_by_id.get(corr.extracted_field_id)
         if field is None:
             raise HTTPException(status_code=400, detail=f"Extracted field {corr.extracted_field_id} does not belong to this document")
-        if corr.new_value == current_values[field.id]:
+        new_unit = corr.new_unit.strip() if corr.new_unit and corr.new_unit.strip() else None
+        unit_changed = new_unit is not None and new_unit != current_units[field.id]
+        if corr.new_value == current_values[field.id] and not unit_changed:
             continue  # Confirmation of the existing value, nothing to record
         if not corr.reason or not corr.reason.strip():
             raise HTTPException(status_code=422, detail=f"Reason required for changing field {field.field_name}")
-        pending_corrections.append((field, corr))
+        pending_corrections.append((field, corr, new_unit if unit_changed else None))
         current_values[field.id] = corr.new_value
+        if unit_changed:
+            current_units[field.id] = new_unit
+    corrected = {field.id for field, _, _ in pending_corrections}
 
     # Re-validate the final values. Only unusable values block approval; abnormal-but-valid
     # results (e.g. OUTSIDE_REFERENCE_RANGE) are confirmed by the reviewer's approval.
@@ -181,23 +192,36 @@ async def complete_review(
         if field.field_name not in VALIDATED_FIELDS:
             continue
         results[field.id] = engine.validate_field(
-            field.field_name, current_values[field.id], field.unit, context, field.reference_range, field.abnormal_flag
+            field.field_name, current_values[field.id], current_units[field.id], context, field.reference_range, field.abnormal_flag
         )
 
     inconsistencies = engine.check_cross_field(
         (fields_by_id[fid].field_name, res[0], res[3]) for fid, res in results.items()
     )
 
+    for fid, (state, messages, meta, norm_val) in list(results.items()):
+        field = fields_by_id[fid]
+        if state == "VALID" and field.field_name in inconsistencies:
+            results[fid] = ("INCONSISTENT_DATES", messages + [inconsistencies[field.field_name]], meta, norm_val)
+        elif fid not in corrected and state in KEPT_IF_UNCHANGED_FROM and field.validation_state in PAGE_CHECK_STATES:
+            # Checks against the page (value not found next to its label, a contradicting
+            # printed flag, a misread name) are not re-run here: the reviewer confirmed the
+            # unchanged value with that warning, which stays on the record.
+            results[fid] = (field.validation_state, list(field.validation_messages or []), meta, norm_val)
+
     blocking_issues = []
     warnings = []
+    # Warnings the reviewer has not seen: raised by their own corrections, or new date conflicts
+    unseen = []
     for fid, (state, messages, meta, norm_val) in results.items():
-        name = fields_by_id[fid].field_name
+        field = fields_by_id[fid]
+        issue = {"field_id": str(fid), "field_name": field.field_name, "state": state, "messages": messages}
         if state in BLOCKING_STATES:
-            blocking_issues.append({"field_id": str(fid), "field_name": name, "state": state, "messages": messages})
+            blocking_issues.append(issue)
         elif state != "VALID":
-            warnings.append({"field_name": name, "state": state})
-        if state == "VALID" and name in inconsistencies:
-            warnings.append({"field_name": name, "state": "INCONSISTENT_DATES"})
+            warnings.append({"field_name": field.field_name, "state": state})
+            if fid in corrected or state != field.validation_state:
+                unseen.append(issue)
 
     if blocking_issues:
         raise HTTPException(status_code=422, detail={
@@ -205,9 +229,15 @@ async def complete_review(
             "message": "Some fields are missing or invalid and must be corrected before approval.",
             "fields": blocking_issues
         })
+    if unseen and not request.confirm_warnings:
+        raise HTTPException(status_code=422, detail={
+            "code": "UNCONFIRMED_WARNINGS",
+            "message": "Your corrections raised warnings. Check them, then confirm to approve.",
+            "fields": unseen
+        })
 
     # Persist corrections
-    for field, corr in pending_corrections:
+    for field, corr, new_unit in pending_corrections:
         previous = field.current_value
         fc = FieldCorrection(
             id=uuid.uuid4(),
@@ -215,6 +245,8 @@ async def complete_review(
             review_id=review.id,
             previous_value=previous,
             new_value=corr.new_value,
+            previous_unit=field.current_unit if new_unit else None,
+            new_unit=new_unit,
             reason=corr.reason
         )
         db.add(fc)
@@ -224,7 +256,7 @@ async def complete_review(
             db, action="FIELD_CORRECTED", resource_type=RESOURCE_EXTRACTED_FIELD, resource_id=str(field.id),
             user_id=current_user.id,
             before_state={"value": previous, "document_id": str(document_id), "field_name": field.field_name},
-            after_state={"value": corr.new_value, "reason": corr.reason}
+            after_state={"value": corr.new_value, "reason": corr.reason, **({"unit": new_unit} if new_unit else {})}
         )
 
     # Store the post-review validation outcome on each field. `value` keeps the original

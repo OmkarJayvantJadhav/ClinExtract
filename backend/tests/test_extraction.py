@@ -26,7 +26,7 @@ def test_rule_based_extractor():
     }
     
     result = extractor.extract(mock_data)
-    assert result.model_version == "rule-based-v1.2"
+    assert result.model_version == "rule-based-v1.3"
     
     fields = result.fields
     assert len(fields) == 3

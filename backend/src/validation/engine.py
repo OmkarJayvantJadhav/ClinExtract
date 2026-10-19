@@ -4,6 +4,7 @@ from src.db.models.extracted_field import ExtractedField
 from src.validation.rules import (
     validate_date, validate_numeric_and_range, check_date_consistency, normalize_sex, normalize_date,
     age_in_years, validate_source_agreement, is_ambiguous_date, date_order, normalize_flag, name_looks_misread,
+    document_date_order, UNKNOWN_SEX, normalize_text,
 )
 from src.validation.confidence import calculate_field_confidence, categorize_confidence
 
@@ -60,11 +61,17 @@ class ValidationEngine:
 
     @staticmethod
     def build_context(values: Dict[str, Optional[str]]) -> Dict[str, Any]:
-        """Patient context used to pick reference ranges: sex and age at collection."""
-        collected = normalize_date(values.get("collection_date") or "") if values.get("collection_date") else None
+        """
+        Document context: the order its day/month dates are read in (taken from any of its dates
+        that can only be read one way, else the configured DATE_ORDER), and the patient's sex and
+        age at collection, used to pick reference ranges.
+        """
+        order = document_date_order(values.get(name) for name in sorted(DATE_FIELDS)) or date_order()
+        collected = normalize_date(values.get("collection_date") or "", order) if values.get("collection_date") else None
         return {
             "sex": normalize_sex(values.get("patient_sex")),
-            "age": age_in_years(values.get("date_of_birth"), collected),
+            "age": age_in_years(values.get("date_of_birth"), collected, order),
+            "date_order": order,
         }
 
     def validate_field(self, field_name: str, value: str, unit: Optional[str] = None, context: Optional[Dict[str, Any]] = None,
@@ -80,12 +87,15 @@ class ValidationEngine:
         meta = {}
         norm_val = value
 
+        if (value is None or value.strip() == "") and field_name in OPTIONAL_FIELDS:
+            return "VALID", messages, meta, None
         if value is None or value.strip() == "":
             state = "MISSING"
             messages.append("Required field missing")
         else:
             if field_name in DATE_FIELDS:
-                st, n_val = validate_date(value)
+                order = context.get("date_order") or date_order()
+                st, n_val = validate_date(value, order=order)
                 norm_val = n_val
                 if st == "INVALID_FORMAT":
                     state = st
@@ -95,11 +105,11 @@ class ValidationEngine:
                     messages.append(f"Date is in the future: {value}")
                 if n_val and is_ambiguous_date(value):
                     # Valid either way round: record how it was read so a reviewer can check it
-                    meta = {"ambiguous_date": True, "read_as": "day first" if date_order() == "DMY" else "month first"}
+                    meta = {"ambiguous_date": True, "read_as": "day first" if order == "DMY" else "month first"}
 
             elif field_name == "patient_sex":
                 norm_val = normalize_sex(value)
-                if norm_val is None:
+                if norm_val is None and normalize_text(value).lower() not in UNKNOWN_SEX:
                     state = "INVALID_FORMAT"
                     messages.append(f"Unrecognized sex value: {value}")
 
@@ -127,6 +137,8 @@ class ValidationEngine:
                             f"({meta.get('plausible_lower')} - {meta.get('plausible_upper')}); "
                             "check for a misread digit or decimal point"
                         )
+                    elif st == "UNRECOGNIZED_UNIT" and not unit:
+                        messages.append(f"No unit printed with the result; expected {meta.get('expected_unit')}")
                     elif st == "UNRECOGNIZED_UNIT":
                         messages.append(f"Unrecognized unit '{unit}'; expected {meta.get('expected_unit')}")
                     elif st == "NO_REFERENCE_RANGE":
@@ -150,16 +162,23 @@ class ValidationEngine:
         meta = field.validation_metadata or {}
         if field.field_name not in NUMERIC_FIELDS or field.validation_state not in ("VALID", "OUTSIDE_REFERENCE_RANGE"):
             return None
-        if meta.get("range_basis") != "report":
-            return None
         printed = normalize_flag(field.abnormal_flag)
-        actual = meta.get("printed_direction")
-        if printed == actual:
-            return None
         words = {"H": "high", "L": "low", None: "normal"}
+        if meta.get("range_basis") == "report":
+            actual = meta.get("printed_direction")
+            if printed == actual:
+                return None
+            range_text = meta.get("printed_range")
+        else:
+            # Against a built-in range only an opposite flag is a contradiction: the lab's own
+            # range may differ, so a flag on a value that looks normal here is not.
+            actual = meta.get("direction")
+            if not printed or not actual or printed == actual:
+                return None
+            range_text = f"{meta.get('range_basis')} range {meta.get('lower')} - {meta.get('upper')}"
         return (
             f"The report marks this result {words[printed]}, but the value read ({field.normalized_value}) is "
-            f"{words[actual]} for its range ({meta.get('printed_range')}); check for a misread digit or decimal point"
+            f"{words[actual]} for its range ({range_text}); check for a misread digit or decimal point"
         )
 
     @staticmethod

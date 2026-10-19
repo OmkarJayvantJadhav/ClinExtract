@@ -7,6 +7,8 @@ from src.db.models.review import ReviewStatus
 class FieldCorrectionCreate(BaseModel):
     extracted_field_id: UUID
     new_value: Optional[str] = None
+    # A corrected unit; None leaves the unit unchanged
+    new_unit: Optional[str] = None
     reason: Optional[str] = None
 
 class ReviewCompleteRequest(BaseModel):
@@ -14,12 +16,16 @@ class ReviewCompleteRequest(BaseModel):
     decision: str  # HUMAN_APPROVED or HUMAN_REJECTED
     corrections: List[FieldCorrectionCreate]
     rejection_reason: Optional[str] = None
+    # The reviewer has seen the warnings their corrections raised (returned by a first attempt)
+    confirm_warnings: bool = False
 
 class FieldCorrectionResponse(BaseModel):
     id: UUID
     extracted_field_id: UUID
     previous_value: Optional[str] = None
     new_value: Optional[str] = None
+    previous_unit: Optional[str] = None
+    new_unit: Optional[str] = None
     reason: Optional[str] = None
     created_at: datetime
     

@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 
 /**
  * type: 'APPROVE' | 'REJECT'
- * correctedFields: [{ id, name, original, newValue }]  - each needs a reason on approval
+ * correctedFields: [{ id, name, original, newValue, originalUnit?, newUnit? }] - each needs a reason on approval
  * warnings: [{ id, name, value, state }]                - abnormal-but-valid values to acknowledge
  * onSubmit: REJECT  -> ({ rejectionReason })
  *           APPROVE -> ({ reasons: { [fieldId]: string } })
@@ -76,9 +76,11 @@ export function DecisionDialogs({ open, onOpenChange, type, onSubmit, correctedF
               <div key={f.id} className="grid gap-1 rounded border p-2">
                 <div className="text-xs">
                   <span className="font-semibold uppercase tracking-wide text-muted-foreground">{f.name}</span>
-                  <span className="ml-2 font-mono line-through text-muted-foreground">{f.original ?? '(empty)'}</span>
+                  <span className="ml-2 font-mono line-through text-muted-foreground">
+                    {`${f.original ?? '(empty)'} ${f.newUnit ? f.originalUnit || '(no unit)' : ''}`.trim()}
+                  </span>
                   <span className="mx-1">→</span>
-                  <span className="font-mono font-semibold">{f.newValue || '(empty)'}</span>
+                  <span className="font-mono font-semibold">{`${f.newValue || '(empty)'} ${f.newUnit || ''}`.trim()}</span>
                 </div>
                 <Input
                   value={fieldReasons[f.id] || ''}
@@ -117,6 +119,44 @@ export function DecisionDialogs({ open, onOpenChange, type, onSubmit, correctedF
             disabled={!canSubmit || isSubmitting}
           >
             {isReject ? 'Confirm Rejection' : 'Approve Document'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Warnings the server found in the final values that the reviewer has not seen yet, e.g. a
+ * corrected value that is implausible or makes the dates inconsistent.
+ * fields: [{ field_id, field_name, state, messages }]
+ */
+export function ConfirmWarningsDialog({ open, fields, onConfirm, onCancel, isSubmitting = false }) {
+  const [checked, setChecked] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel(); }}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Check these values</DialogTitle>
+          <DialogDescription>Your corrections raised warnings. Check them against the document before approving.</DialogDescription>
+        </DialogHeader>
+        <ul className="grid gap-2 text-sm">
+          {fields.map(f => (
+            <li key={`${f.field_id}-${f.state}`} className="rounded border border-warning/30 bg-warning/5 p-2">
+              <span className="font-semibold">{f.field_name.replace(/_/g, ' ')}</span>{' '}
+              <span className="text-xs text-muted-foreground">({f.state.replace(/_/g, ' ').toLowerCase()})</span>
+              {f.messages?.length > 0 && <div className="mt-1 text-xs">{f.messages.join('; ')}</div>}
+            </li>
+          ))}
+        </ul>
+        <label className="flex items-center gap-2 text-xs">
+          <input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)} />
+          I have checked these values against the document.
+        </label>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={isSubmitting}>Back to editing</Button>
+          <Button className="bg-success hover:bg-success/90 text-success-foreground" onClick={onConfirm} disabled={!checked || isSubmitting}>
+            Approve Document
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,7 +1,7 @@
 import React from 'react';
 import { EditableField } from './EditableField';
 
-export function ExtractionPanel({ extraction, corrections, activeFieldId, editingFieldId, onFieldSelect, onEditingChange, onFieldEdit }) {
+export function ExtractionPanel({ extraction, corrections, unitCorrections = {}, activeFieldId, editingFieldId, onFieldSelect, onEditingChange, onFieldEdit }) {
   const renderSection = (title, fields) => {
     if (!fields || fields.length === 0) return null;
     return (
@@ -15,12 +15,13 @@ export function ExtractionPanel({ extraction, corrections, activeFieldId, editin
               key={field.id} 
               field={field} 
               currentValue={corrections[field.id] !== undefined ? corrections[field.id] : field.value}
+              currentUnit={unitCorrections[field.id] ?? field.unit}
               isCorrected={corrections[field.id] !== undefined}
               isActive={field.id === activeFieldId}
               isEditing={field.id === editingFieldId}
               onEditingChange={(editing) => onEditingChange(editing ? field.id : null)}
               onSelect={() => onFieldSelect(field)}
-              onEdit={(val) => onFieldEdit(field.id, val)}
+              onEdit={(val, unit) => onFieldEdit(field.id, val, unit)}
             />
           ))}
         </div>

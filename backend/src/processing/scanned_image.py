@@ -78,7 +78,9 @@ def _reading_order(positioned):
     Sorts OCR words into visual rows, top to bottom and left to right within a row.
     Tesseract emits widely spaced table columns as separate blocks (every test name, then every
     result), which separates each label from its value; row order keeps them together.
-    `positioned` holds (center_y, height, left, word) tuples in deskewed-image pixels.
+    `positioned` holds (center_y, height, left, word) tuples in deskewed-image pixels. Each word
+    is tagged with its row number ("line"): its box is in the original, possibly skewed image,
+    where the rows can no longer be told apart by height.
     """
     rows = []  # [center_y, height, items]
     for item in sorted(positioned, key=lambda p: p[0]):
@@ -87,6 +89,9 @@ def _reading_order(positioned):
             rows[-1][2].append(item)
         else:
             rows.append([center_y, height, [item]])
+    for line, (_, _, items) in enumerate(rows):
+        for item in items:
+            item[3]["line"] = line
     return [item for _, _, items in rows for item in sorted(items, key=lambda p: p[2])]
 
 def process_scanned_page(image_bytes: bytes, page_number: int) -> dict:

@@ -56,7 +56,7 @@ _COUNT_UNITS = {
 # Multipliers that convert a value in the given (normalized) unit into the canonical unit.
 UNIT_CONVERSIONS = {
     "glucose": {"mg/dl": 1.0, "mmol/l": 18.016},
-    "hemoglobin": {"g/dl": 1.0, "g/l": 0.1, "mmol/l": 1.611},
+    "hemoglobin": {"g/dl": 1.0, "gm/dl": 1.0, "g/l": 0.1, "gm/l": 0.1, "mmol/l": 1.611},
     "hematocrit": {"%": 1.0, "l/l": 100.0},
     "white_blood_cell_count": _COUNT_UNITS,
     "platelet_count": _COUNT_UNITS,
