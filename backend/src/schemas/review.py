@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
@@ -29,8 +29,7 @@ class FieldCorrectionResponse(BaseModel):
     reason: Optional[str] = None
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ReviewResponse(BaseModel):
     id: UUID
@@ -41,5 +40,4 @@ class ReviewResponse(BaseModel):
     completed_at: Optional[datetime] = None
     field_corrections: List[FieldCorrectionResponse] = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

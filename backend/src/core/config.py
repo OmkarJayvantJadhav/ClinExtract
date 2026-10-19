@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import model_validator
 from typing import List
 import json
@@ -99,8 +99,7 @@ class Settings(BaseSettings):
     VLM_API_KEY: str | None = None
     VLM_BASE_URL: str | None = None
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env")
 
     @model_validator(mode="after")
     def _require_real_secret_in_production(self):
