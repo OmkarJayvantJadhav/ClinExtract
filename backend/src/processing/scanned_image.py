@@ -67,6 +67,9 @@ def _check_image_size(image_bytes: bytes) -> None:
     try:
         with Image.open(io.BytesIO(image_bytes)) as probe:
             width, height = probe.size
+    except Image.DecompressionBombError as e:
+        # Pillow refuses to even open images this large (over about 180 million pixels)
+        raise ValueError(f"Image too large to process ({e})") from e
     except Exception:
         # Let OpenCV report undecodable data below
         return

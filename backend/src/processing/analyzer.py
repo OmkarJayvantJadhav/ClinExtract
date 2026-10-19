@@ -6,12 +6,15 @@ import pymupdf
 from src.core.config import settings
 from src.processing.native_pdf import process_native_page
 from src.processing.scanned_image import process_scanned_page
+from src.processing.page_images import capped_zoom
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 # Tesseract is tuned for ~300 DPI input; PDF user space is 72 DPI.
 OCR_RENDER_DPI = 300
+# A scanned page so large that it would have to be read below this resolution is refused
+MIN_OCR_DPI = 150
 # Pages with less native text than this are treated as scanned and OCR'd in full.
 MIN_NATIVE_TEXT_CHARS = 20
 # On a text page, embedded images covering at least this share of the page are OCR'd too:
@@ -46,14 +49,14 @@ def _render_image_regions(page: pymupdf.Page) -> list:
     (clip rect, PNG) for each large image on a native-text page, rendered for OCR upright like
     the page's text, i.e. without the page's /Rotate (clips are on the unrotated page).
     """
-    zoom = OCR_RENDER_DPI / 72.0
     rotation = page.rotation
     page.set_rotation(0)  # in memory only; the document is never saved
     try:
-        return [
-            (clip, page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip, alpha=False).tobytes("png"))
-            for clip in _image_regions(page)
-        ]
+        regions = []
+        for clip in _image_regions(page):
+            zoom = capped_zoom(clip, OCR_RENDER_DPI)
+            regions.append((clip, page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip, alpha=False).tobytes("png")))
+        return regions
     finally:
         page.set_rotation(rotation)
 
@@ -154,7 +157,12 @@ class DocumentAnalyzer:
                         tasks += [(png, number) for _, png in regions]
                     else:
                         # Scanned PDF page: render to image at OCR resolution
-                        zoom = OCR_RENDER_DPI / 72.0
+                        zoom = capped_zoom(page.rect, OCR_RENDER_DPI)
+                        if zoom < MIN_OCR_DPI / 72.0:
+                            raise DocumentProcessingError(
+                                f"Page {number} is too large to read "
+                                f"({page.rect.width / 72:.0f} x {page.rect.height / 72:.0f} inches)"
+                            )
                         plans.append(("scanned", None, None, len(tasks)))
                         tasks.append((page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom)).tobytes("png"), number))
             finally:
